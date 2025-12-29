@@ -8,12 +8,22 @@
       "user": {
         "title": "Connect to your Tado account",
         "description": "Open {url} to authorize this integration, then click Submit.",
-        "data": {}
+        "data": {
+          "verification_url": "Verification URL"
+        },
+        "data_description": {
+          "verification_url": "Open this link in a browser to authorize."
+        }
       },
       "reconfigure": {
         "title": "Re-authorize your Tado account",
         "description": "Open {url} to authorize this integration, then click Submit.",
-        "data": {}
+        "data": {
+          "verification_url": "Verification URL"
+        },
+        "data_description": {
+          "verification_url": "Open this link in a browser to authorize."
+        }
       }
     },
     "error": {

@@ -32,7 +32,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-DATA_SCHEMA = vol.Schema({})
+ATTR_VERIFICATION_URL = "verification_url"
 
 
 def _new_token_file_path(hass: HomeAssistant) -> str:
@@ -106,9 +106,16 @@ class TadoConfigFlow(ConfigFlow, domain=DOMAIN):
             return await self._async_finish_setup(tado)
 
         verification_url = tado.device_verification_url() or ""
+        data_schema = vol.Schema(
+            {
+                vol.Optional(
+                    ATTR_VERIFICATION_URL, default=verification_url
+                ): str,
+            }
+        )
         return self.async_show_form(
             step_id="user",
-            data_schema=DATA_SCHEMA,
+            data_schema=data_schema,
             errors=errors,
             description_placeholders={"url": verification_url},
         )
@@ -160,9 +167,16 @@ class TadoConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
 
         verification_url = tado.device_verification_url() or ""
+        data_schema = vol.Schema(
+            {
+                vol.Optional(
+                    ATTR_VERIFICATION_URL, default=verification_url
+                ): str,
+            }
+        )
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=DATA_SCHEMA,
+            data_schema=data_schema,
             errors=errors,
             description_placeholders={"url": verification_url},
         )
