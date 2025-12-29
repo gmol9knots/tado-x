@@ -55,3 +55,28 @@ def setup_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN, SERVICE_ADD_METER_READING, add_meter_reading, SCHEMA_ADD_METER_READING
     )
+
+async def async_set_temperature_offset(hass, device_id: str, temperature_offset: float):
+    """Set the offset via Tado Hops API."""
+    client = hass.data[DOMAIN][DATA_CLIENT]  # existing Tado API client
+
+    url = f"https://hops.tado.com/homes/{client.home_id}/roomsAndDevices/devices/{device_id}"
+    payload = {"temperatureOffset": temperature_offset}
+
+    headers = {
+        "Authorization": f"Bearer {client.access_token}",
+        "Content-Type": "application/json",
+    }
+
+    response = await hass.async_add_executor_job(
+        client.session.patch,
+        url,
+        json=payload,
+        headers=headers,
+    )
+
+    if response.status_code not in (200, 204):
+        _LOGGER.error(f"Failed to set offset: {response.text}")
+        return False
+
+    return True
