@@ -93,7 +93,14 @@ class TadoConfigFlow(ConfigFlow, domain=DOMAIN):
                     await self.hass.async_add_executor_job(tado.device_activation)
                 if tado.device_activation_status() == DeviceActivationStatus.COMPLETED:
                     return await self._async_finish_setup(tado)
-                errors["base"] = "invalid_auth"
+                errors["base"] = "activation_failed"
+            except TadoException as ex:
+                _LOGGER.warning("Tado device activation failed: %s", ex)
+                self._tado = None
+                errors["base"] = "activation_failed"
+            except requests.exceptions.RequestException as ex:
+                _LOGGER.warning("Tado connection error: %s", ex)
+                errors["base"] = "cannot_connect"
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
             except CannotConnect:
@@ -105,6 +112,7 @@ class TadoConfigFlow(ConfigFlow, domain=DOMAIN):
         if tado.device_activation_status() == DeviceActivationStatus.COMPLETED:
             return await self._async_finish_setup(tado)
 
+        tado = await self._async_get_tado()
         verification_url = tado.device_verification_url() or ""
         data_schema = vol.Schema(
             {
@@ -152,20 +160,22 @@ class TadoConfigFlow(ConfigFlow, domain=DOMAIN):
                 if tado.device_activation_status() != DeviceActivationStatus.COMPLETED:
                     await self.hass.async_add_executor_job(tado.device_activation)
                 if tado.device_activation_status() != DeviceActivationStatus.COMPLETED:
-                    errors["base"] = "invalid_auth"
+                    errors["base"] = "activation_failed"
                 else:
                     return self.async_update_reload_and_abort(
                         reconfigure_entry,
                         data_updates={CONF_TOKEN_FILE: self._token_file},
                     )
             except TadoException:
-                errors["base"] = "invalid_auth"
+                self._tado = None
+                errors["base"] = "activation_failed"
             except requests.exceptions.RequestException:
                 errors["base"] = "cannot_connect"
             except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
 
+        tado = await self._async_get_tado()
         verification_url = tado.device_verification_url() or ""
         data_schema = vol.Schema(
             {
