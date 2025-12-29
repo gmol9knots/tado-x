@@ -190,7 +190,8 @@ class TadoWaterHeater(TadoZoneEntity, WaterHeaterEntity):
     @property
     def is_away_mode_on(self) -> bool:
         """Return true if away mode is on."""
-        return self._tado_zone_data.is_away
+        zone_presence = getattr(self._tado_zone_data, "tado_mode", None)
+        return zone_presence is not None and str(zone_presence) == "AWAY"
 
     @property
     def min_temp(self) -> float:

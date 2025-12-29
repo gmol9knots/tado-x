@@ -4,9 +4,10 @@ from datetime import timedelta
 import logging
 
 import requests.exceptions
+from PyTado.exceptions import TadoException
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
@@ -15,6 +16,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     CONF_FALLBACK,
+    CONF_TOKEN_FILE,
     CONST_OVERLAY_MANUAL,
     CONST_OVERLAY_TADO_DEFAULT,
     CONST_OVERLAY_TADO_MODE,
@@ -46,23 +48,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up Tado."""
 
     setup_services(hass)
-    
-    async def handle_set_offset(call):
-        entity = call.data.get("entity_id")
-        offset = call.data["offset"]
-
-        # Find your Tado climate entity/device ID
-        device_id = hass.states.get(entity).attributes.get("tado_device_id")
-
-        connector = hass.data[DOMAIN][DATA_TADO_CONNECTOR]
-        connector.set_temperature_offset(device_id, offset)
-
-    hass.services.async_register(
-        DOMAIN,
-        "set_climate_temperature_offset",
-        handle_set_offset
-    )
-    
     return True
 
 
@@ -74,18 +59,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: TadoConfigEntry) -> bool
 
     _async_import_options_from_data_if_missing(hass, entry)
 
-    username = entry.data[CONF_USERNAME]
-    password = entry.data[CONF_PASSWORD]
+    token_file = entry.data.get(CONF_TOKEN_FILE)
     fallback = entry.options.get(CONF_FALLBACK, CONST_OVERLAY_TADO_DEFAULT)
 
-    tadoconnector = TadoConnector(hass, username, password, fallback)
+    if not token_file:
+        _LOGGER.error("Missing token file for Tado config entry, please reconfigure")
+        return False
+
+    tadoconnector = TadoConnector(hass, token_file, fallback)
 
     try:
         await hass.async_add_executor_job(tadoconnector.setup)
-    except KeyError:
-        _LOGGER.error("Failed to login to tado")
-        return False
     except RuntimeError as exc:
+        _LOGGER.error("Failed to setup tado: %s", exc)
+        return False
+    except TadoException as exc:
         _LOGGER.error("Failed to setup tado: %s", exc)
         return False
     except requests.exceptions.Timeout as ex:

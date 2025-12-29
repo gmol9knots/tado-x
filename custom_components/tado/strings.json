@@ -6,21 +6,14 @@
     },
     "step": {
       "user": {
-        "data": {
-          "password": "[%key:common::config_flow::data::password%]",
-          "username": "[%key:common::config_flow::data::username%]"
-        },
-        "title": "Connect to your Tado account"
+        "title": "Connect to your Tado account",
+        "description": "Open {url} to authorize this integration, then click Submit.",
+        "data": {}
       },
       "reconfigure": {
-        "title": "Reconfigure your Tado",
-        "description": "Reconfigure the entry, for your account: `{username}`.",
-        "data": {
-          "password": "[%key:common::config_flow::data::password%]"
-        },
-        "data_description": {
-          "password": "Enter the (new) password for Tado."
-        }
+        "title": "Re-authorize your Tado account",
+        "description": "Open {url} to authorize this integration, then click Submit.",
+        "data": {}
       }
     },
     "error": {
@@ -130,6 +123,16 @@
       "fields": {
         "offset": {
           "name": "Offset",
+          "description": "Offset you would like (depending on your device)."
+        }
+      }
+    },
+    "set_temperature_offset": {
+      "name": "Set temperature offset",
+      "description": "Sets the temperature offset of climate entities.",
+      "fields": {
+        "temperature_offset": {
+          "name": "Temperature offset",
           "description": "Offset you would like (depending on your device)."
         }
       }

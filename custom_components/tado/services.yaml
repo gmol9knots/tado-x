@@ -62,6 +62,21 @@ set_climate_temperature_offset:
           step: 0.01
           unit_of_measurement: "°"
 
+set_temperature_offset:
+  target:
+    entity:
+      integration: tado
+      domain: climate
+  fields:
+    temperature_offset:
+      default: 0
+      selector:
+        number:
+          min: -10
+          max: 10
+          step: 0.01
+          unit_of_measurement: "°"
+
 add_meter_reading:
   fields:
     config_entry:

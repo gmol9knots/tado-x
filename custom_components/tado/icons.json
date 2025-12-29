@@ -9,6 +9,9 @@
     "set_climate_temperature_offset": {
       "service": "mdi:thermometer"
     },
+    "set_temperature_offset": {
+      "service": "mdi:thermometer"
+    },
     "add_meter_reading": {
       "service": "mdi:counter"
     }

@@ -141,7 +141,7 @@ TEMPERATURE_ENTITY_DESCRIPTION = TadoSensorEntityDescription(
     key="temperature",
     state_fn=lambda data: data.current_temp,
     attributes_fn=lambda data: {
-        "time": data.current_temp_timestamp,
+        "time": getattr(data, "current_temp_timestamp", None),
         "setting": 0,  # setting is used in climate device
     },
     native_unit_of_measurement=UnitOfTemperature.CELSIUS,
@@ -151,7 +151,9 @@ TEMPERATURE_ENTITY_DESCRIPTION = TadoSensorEntityDescription(
 HUMIDITY_ENTITY_DESCRIPTION = TadoSensorEntityDescription(
     key="humidity",
     state_fn=lambda data: data.current_humidity,
-    attributes_fn=lambda data: {"time": data.current_humidity_timestamp},
+    attributes_fn=lambda data: {
+        "time": getattr(data, "current_humidity_timestamp", None)
+    },
     native_unit_of_measurement=PERCENTAGE,
     device_class=SensorDeviceClass.HUMIDITY,
     state_class=SensorStateClass.MEASUREMENT,
@@ -165,7 +167,9 @@ HEATING_ENTITY_DESCRIPTION = TadoSensorEntityDescription(
     key="heating",
     translation_key="heating",
     state_fn=lambda data: data.heating_power_percentage,
-    attributes_fn=lambda data: {"time": data.heating_power_timestamp},
+    attributes_fn=lambda data: {
+        "time": getattr(data, "heating_power_timestamp", None)
+    },
     native_unit_of_measurement=PERCENTAGE,
     state_class=SensorStateClass.MEASUREMENT,
 )
@@ -174,7 +178,7 @@ AC_ENTITY_DESCRIPTION = TadoSensorEntityDescription(
     translation_key="ac",
     name="AC",
     state_fn=lambda data: data.ac_power,
-    attributes_fn=lambda data: {"time": data.ac_power_timestamp},
+    attributes_fn=lambda data: {"time": getattr(data, "ac_power_timestamp", None)},
 )
 
 ZONE_SENSORS = {

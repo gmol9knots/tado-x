@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import logging
 from typing import Any
 
+from PyTado.exceptions import TadoException
 from PyTado.interface import Tado
 from requests import RequestException
 
@@ -33,13 +34,10 @@ _LOGGER = logging.getLogger(__name__)
 class TadoConnector:
     """An object to store the Tado data."""
 
-    def __init__(
-        self, hass: HomeAssistant, username: str, password: str, fallback: str
-    ) -> None:
+    def __init__(self, hass: HomeAssistant, token_file: str | None, fallback: str) -> None:
         """Initialize Tado Connector."""
         self.hass = hass
-        self._username = username
-        self._password = password
+        self._token_file = token_file
         self._fallback = fallback
 
         self.home_id: int = 0
@@ -47,6 +45,7 @@ class TadoConnector:
         self.tado = None
         self.zones: list[dict[Any, Any]] = []
         self.devices: list[dict[Any, Any]] = []
+        self._zones_by_id: dict[int, Any] = {}
         self.data: dict[str, dict] = {
             "device": {},
             "mobile_device": {},
@@ -63,20 +62,68 @@ class TadoConnector:
 
     def setup(self):
         """Connect to Tado and fetch the zones."""
-        self.tado = Tado(self._username, self._password)
+        self.tado = Tado(token_file_path=self._token_file)
+
+        tado_me = self.tado.get_me()
+        if not tado_me.homes:
+            raise RuntimeError("No homes returned by Tado API")
+
+        tado_home = tado_me.homes[0]
+        self.home_id = tado_home.id
+        self.home_name = tado_home.name
+        self.is_x = tado_home.generation == "LINE_X"
+        if tado_home.generation is None and hasattr(self.tado, "_http"):
+            self.is_x = bool(self.tado._http.is_x_line)
+
         # Load zones and devices
-        self.zones = self.tado.get_zones()
-        self.devices = self.tado.get_devices()
-        tado_home = self.tado.get_me()["homes"][0]
-        self.home_id = tado_home["id"]
-        self.home_name = tado_home["name"]
-        self.is_x = self.tado.http.isX
-        [device.update(is_x=self.is_x) for device in self.devices]
-        if self.is_x:
-            for z in self.zones:
-                z["type"] = TYPE_HEATING
-                z["name"] = z["roomName"]
-                z["id"] = z["roomId"]
+        self._zones_by_id = {}
+        self.zones = []
+        for zone in self.tado.get_zones():
+            zone_id = self._get_zone_id(zone)
+            self._zones_by_id[zone_id] = zone
+            self.zones.append(
+                {
+                    "id": zone_id,
+                    "name": zone.name,
+                    "type": self._get_zone_type(zone),
+                    "devices": [self._normalize_device(device) for device in zone.devices],
+                }
+            )
+
+        self.devices = [self._normalize_device(device) for device in self.tado.get_devices()]
+
+    def _to_dict(self, data: Any) -> dict[str, Any]:
+        if isinstance(data, dict):
+            return data
+        if hasattr(data, "to_dict"):
+            return data.to_dict()
+        if hasattr(data, "model_dump"):
+            return data.model_dump(by_alias=True)
+        return {}
+
+    def _normalize_device(self, device: Any) -> dict[str, Any]:
+        device_dict = self._to_dict(device)
+        device_dict["is_x"] = self.is_x
+        return device_dict
+
+    def _get_zone_id(self, zone: Any) -> int:
+        if isinstance(zone, dict):
+            return int(zone.get("id") or zone.get("roomId") or zone.get("room_id"))
+        return int(
+            getattr(zone, "_id", None)
+            or getattr(zone, "id", None)
+            or getattr(zone, "room_id", None)
+        )
+
+    def _get_zone_type(self, zone: Any) -> str:
+        zone_type = None
+        if isinstance(zone, dict):
+            zone_type = zone.get("type")
+        else:
+            zone_type = getattr(zone, "zone_type", None)
+        if zone_type is None:
+            return TYPE_HEATING
+        return str(zone_type)
 
     def get_mobile_devices(self):
         """Return the Tado mobile devices."""
@@ -93,25 +140,24 @@ class TadoConnector:
     def update_mobile_devices(self) -> None:
         """Update the mobile devices."""
         try:
-            mobile_devices = self.get_mobile_devices()
-        except RuntimeError:
+            mobile_devices_raw = self.get_mobile_devices()
+        except (RuntimeError, TadoException):
             _LOGGER.error("Unable to connect to Tado while updating mobile devices")
             return
 
-        if not mobile_devices:
+        if not mobile_devices_raw:
             _LOGGER.debug("No linked mobile devices found for home ID %s", self.home_id)
             return
 
-        # Errors are planned to be converted to exceptions
-        # in PyTado library, so this can be removed
-        if isinstance(mobile_devices, dict) and mobile_devices.get("errors"):
+        if isinstance(mobile_devices_raw, dict) and mobile_devices_raw.get("errors"):
             _LOGGER.error(
                 "Error for home ID %s while updating mobile devices: %s",
                 self.home_id,
-                mobile_devices["errors"],
+                mobile_devices_raw["errors"],
             )
             return
 
+        mobile_devices = [self._to_dict(device) for device in mobile_devices_raw]
         for mobile_device in mobile_devices:
             self.data["mobile_device"][mobile_device["id"]] = mobile_device
             _LOGGER.debug(
@@ -129,7 +175,7 @@ class TadoConnector:
         """Update the device data from Tado."""
         try:
             devices = self.tado.get_devices()
-        except RuntimeError:
+        except (RuntimeError, TadoException):
             _LOGGER.error("Unable to connect to Tado while updating devices")
             return
 
@@ -137,8 +183,6 @@ class TadoConnector:
             _LOGGER.debug("No linked devices found for home ID %s", self.home_id)
             return
 
-        # Errors are planned to be converted to exceptions
-        # in PyTado library, so this can be removed
         if isinstance(devices, dict) and devices.get("errors"):
             _LOGGER.error(
                 "Error for home ID %s while updating devices: %s",
@@ -148,75 +192,74 @@ class TadoConnector:
             return
 
         for device in devices:
+            device_info = self._normalize_device(device)
             if self.is_x:
-                device_short_serial_no = device["serialNumber"]
+                device_id = device_info.get("serialNumber")
             else:
-                device_short_serial_no = device["shortSerialNo"]
-            _LOGGER.debug("Updating device %s", device_short_serial_no)
+                device_id = device_info.get("shortSerialNo")
+            if not device_id:
+                _LOGGER.debug("Skipping device without id: %s", device_info)
+                continue
 
-            if self.is_x:
-                device[TEMP_OFFSET] = device["temperatureOffset"]
-            else:
+            _LOGGER.debug("Updating device %s", device_id)
+
+            if not self.is_x:
                 try:
-                    if (
-                        INSIDE_TEMPERATURE_MEASUREMENT
-                        in device["characteristics"]["capabilities"]
-                    ):
-                        device[TEMP_OFFSET] = self.tado.get_device_info(
-                            device_short_serial_no, TEMP_OFFSET
-                        )
-                except RuntimeError:
+                    capabilities = device_info.get("characteristics", {}).get(
+                        "capabilities", []
+                    )
+                    if INSIDE_TEMPERATURE_MEASUREMENT in capabilities:
+                        temp_offset = self.tado.get_temp_offset(device_id)
+                        device_info[TEMP_OFFSET] = self._to_dict(temp_offset)
+                except (RuntimeError, TadoException):
                     _LOGGER.error(
                         "Unable to connect to Tado while updating device %s",
-                        device_short_serial_no,
+                        device_id,
                     )
                     return
 
-            self.data["device"][device_short_serial_no] = device
+            self.data["device"][device_id] = device_info
 
             _LOGGER.debug(
                 "Dispatching update to %s device %s: %s",
                 self.home_id,
-                device_short_serial_no,
-                device,
+                device_id,
+                device_info,
             )
             dispatcher_send(
                 self.hass,
                 SIGNAL_TADO_UPDATE_RECEIVED.format(
-                    self.home_id, "device", device_short_serial_no
+                    self.home_id, "device", device_id
                 ),
             )
 
     def update_zones(self):
         """Update the zone data from Tado."""
-        try:
-            zone_states = self.tado.get_zone_states()
-        except RuntimeError:
-            _LOGGER.error("Unable to connect to Tado while updating zones")
-            return
-
-        if not self.is_x:
-            zone_states = zone_states["zoneStates"]
-
-        for zone in zone_states:
-            self.update_zone(int(zone if not self.is_x else zone["id"]))
+        for zone_id in list(self._zones_by_id):
+            self.update_zone(zone_id)
 
     def update_zone(self, zone_id):
         """Update the internal data from Tado."""
         _LOGGER.debug("Updating zone %s", zone_id)
-        try:
-            data = self.tado.get_zone_state(zone_id)
-        except RuntimeError:
-            _LOGGER.error("Unable to connect to Tado while updating zone %s", zone_id)
-            return
+        zone = self._zones_by_id.get(zone_id)
+        if zone is None:
+            try:
+                zone = self.tado.get_zone(zone_id)
+            except (RuntimeError, TadoException):
+                _LOGGER.error(
+                    "Unable to connect to Tado while updating zone %s", zone_id
+                )
+                return
+            self._zones_by_id[zone_id] = zone
 
-        self.data["zone"][zone_id] = data
+        zone.update()
+        self.data["zone"][zone_id] = zone
 
         _LOGGER.debug(
             "Dispatching update to %s zone %s: %s",
             self.home_id,
             zone_id,
-            data,
+            zone,
         )
         dispatcher_send(
             self.hass,
@@ -226,13 +269,13 @@ class TadoConnector:
     def update_home(self):
         """Update the home data from Tado."""
         try:
-            self.data["weather"] = self.tado.get_weather()
-            self.data["geofence"] = self.tado.get_home_state()
+            self.data["weather"] = self._to_dict(self.tado.get_weather())
+            self.data["geofence"] = self._to_dict(self.tado.get_home_state())
             dispatcher_send(
                 self.hass,
                 SIGNAL_TADO_UPDATE_RECEIVED.format(self.home_id, "home", "data"),
             )
-        except RuntimeError:
+        except (RuntimeError, TadoException):
             _LOGGER.error(
                 "Unable to connect to Tado while updating weather and geofence data"
             )
@@ -242,7 +285,26 @@ class TadoConnector:
         """Return the capabilities of the devices."""
         if self.is_x:
             return {"type": TYPE_HEATING}
-        return self.tado.get_capabilities(zone_id)
+        capabilities = self.tado.get_capabilities(zone_id)
+        if isinstance(capabilities, dict):
+            return capabilities
+
+        caps_dict: dict[str, Any] = {"type": str(capabilities.type)}
+        if getattr(capabilities, "temperatures", None) is not None:
+            caps_dict["temperatures"] = self._to_dict(capabilities.temperatures)
+
+        mode_map = {
+            "AUTO": getattr(capabilities, "auto", None),
+            "HEAT": getattr(capabilities, "heat", None),
+            "COOL": getattr(capabilities, "cool", None),
+            "DRY": getattr(capabilities, "dry", None),
+            "FAN": getattr(capabilities, "fan", None),
+        }
+        for mode, mode_caps in mode_map.items():
+            if mode_caps is not None:
+                caps_dict[mode] = self._to_dict(mode_caps)
+
+        return caps_dict
 
     def get_auto_geofencing_supported(self):
         """Return whether the Tado Home supports auto geofencing."""
@@ -336,18 +398,27 @@ class TadoConnector:
 
     def set_temperature_offset(self, device_id, offset):
         """Set temperature offset of device."""
+        if not device_id:
+            _LOGGER.error("Missing device id for temperature offset")
+            return
         try:
             self.tado.set_temp_offset(device_id, offset)
         except RequestException as exc:
             _LOGGER.error("Could not set temperature offset: %s", exc)
+            return
+
+        self.update_devices()
 
     def set_meter_reading(self, reading: int) -> dict[str, Any]:
         """Send meter reading to Tado."""
-        dt: str = datetime.now().strftime("%Y-%m-%d")
+        reading_date = datetime.now().date()
         if self.tado is None:
             raise HomeAssistantError("Tado client is not initialized")
 
         try:
-            return self.tado.set_eiq_meter_readings(date=dt, reading=reading)
+            response = self.tado.set_eiq_meter_readings(
+                reading_date=reading_date, reading=reading
+            )
+            return self._to_dict(response)
         except RequestException as exc:
             raise HomeAssistantError("Could not set meter reading") from exc

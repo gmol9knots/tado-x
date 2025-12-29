@@ -100,10 +100,15 @@ CLIMATE_TIMER_SCHEMA: VolDictType = {
 }
 
 SERVICE_TEMP_OFFSET = "set_climate_temperature_offset"
+SERVICE_TEMPERATURE_OFFSET = "set_temperature_offset"
 ATTR_OFFSET = "offset"
+ATTR_TEMPERATURE_OFFSET = "temperature_offset"
 
 CLIMATE_TEMP_OFFSET_SCHEMA: VolDictType = {
     vol.Required(ATTR_OFFSET, default=0): vol.Coerce(float),
+}
+CLIMATE_TEMPERATURE_OFFSET_SCHEMA: VolDictType = {
+    vol.Required(ATTR_TEMPERATURE_OFFSET, default=0): vol.Coerce(float),
 }
 
 
@@ -126,6 +131,11 @@ async def async_setup_entry(
     platform.async_register_entity_service(
         SERVICE_TEMP_OFFSET,
         CLIMATE_TEMP_OFFSET_SCHEMA,
+        "set_temp_offset",
+    )
+    platform.async_register_entity_service(
+        SERVICE_TEMPERATURE_OFFSET,
+        CLIMATE_TEMPERATURE_OFFSET_SCHEMA,
         "set_temp_offset",
     )
 
@@ -439,7 +449,8 @@ class TadoClimate(TadoZoneEntity, ClimateEntity):
                 return PRESET_HOME
             if self._tado.is_x and self._tado_geofence_data["presence"] == "AWAY":
                 return PRESET_AWAY
-        if self._tado_zone_data.is_away:
+        zone_presence = getattr(self._tado_zone_data, "tado_mode", None)
+        if zone_presence is not None and str(zone_presence) == "AWAY":
             return PRESET_AWAY
         return PRESET_HOME
 
@@ -485,16 +496,25 @@ class TadoClimate(TadoZoneEntity, ClimateEntity):
             overlay_mode=requested_overlay,
         )
 
-    def set_temp_offset(self, offset: float) -> None:
+    def set_temp_offset(
+        self,
+        offset: float | None = None,
+        temperature_offset: float | None = None,
+    ) -> None:
         """Set offset on the entity."""
+
+        if temperature_offset is None:
+            temperature_offset = offset
+        if temperature_offset is None:
+            return
 
         _LOGGER.debug(
             "Setting temperature offset for device %s setting to (%.1f)",
             self._device_id,
-            offset,
+            temperature_offset,
         )
 
-        self._tado.set_temperature_offset(self._device_id, offset)
+        self._tado.set_temperature_offset(self._device_id, temperature_offset)
 
     def set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""
@@ -624,9 +644,10 @@ class TadoClimate(TadoZoneEntity, ClimateEntity):
         self._tado_zone_data = self._tado.data["zone"][self.zone_id]
 
         if self._tado.is_x:
-            self._tado_zone_temp_offset["offset_celsius"] = self._tado.data["device"][
-                self._device_id
-            ][TEMP_OFFSET]
+            if self._device_id in self._tado.data["device"]:
+                self._tado_zone_temp_offset["offset_celsius"] = self._tado.data[
+                    "device"
+                ][self._device_id].get(TEMP_OFFSET)
         else:
             # Assign offset values to mapped attributes
             for offset_key, attr in TADO_TO_HA_OFFSET_MAP.items():

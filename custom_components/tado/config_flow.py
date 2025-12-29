@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from uuid import uuid4
 
-import PyTado
+from PyTado.exceptions import TadoException
+from PyTado.http import DeviceActivationStatus
 from PyTado.interface import Tado
 import requests.exceptions
 import voluptuous as vol
@@ -17,56 +19,26 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlow,
 )
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 
 from .const import (
     CONF_FALLBACK,
+    CONF_TOKEN_FILE,
     CONST_OVERLAY_TADO_DEFAULT,
     CONST_OVERLAY_TADO_OPTIONS,
     DOMAIN,
-    UNIQUE_ID,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-DATA_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_USERNAME): str,
-        vol.Required(CONF_PASSWORD): str,
-    }
-)
+DATA_SCHEMA = vol.Schema({})
 
 
-async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
-    """Validate the user input allows us to connect.
-
-    Data has the keys from DATA_SCHEMA with values provided by the user.
-    """
-
-    try:
-        tado = await hass.async_add_executor_job(
-            Tado, data[CONF_USERNAME], data[CONF_PASSWORD]
-        )
-        tado_me = await hass.async_add_executor_job(tado.getMe)
-    except KeyError as ex:
-        raise InvalidAuth from ex
-    except RuntimeError as ex:
-        raise CannotConnect from ex
-    except requests.exceptions.HTTPError as ex:
-        if ex.response.status_code > 400 and ex.response.status_code < 500:
-            raise InvalidAuth from ex
-        raise CannotConnect from ex
-
-    if "homes" not in tado_me or len(tado_me["homes"]) == 0:
-        raise NoHomes
-
-    home = tado_me["homes"][0]
-    unique_id = str(home["id"])
-    name = home["name"]
-
-    return {"title": name, UNIQUE_ID: unique_id}
+def _new_token_file_path(hass: HomeAssistant) -> str:
+    return hass.config.path(
+        ".storage", f"tado_refresh_token_{uuid4().hex}.json"
+    )
 
 
 class TadoConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -74,33 +46,71 @@ class TadoConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    def __init__(self) -> None:
+        self._tado: Tado | None = None
+        self._token_file: str | None = None
+
+    async def _async_get_tado(self) -> Tado:
+        if self._token_file is None:
+            self._token_file = _new_token_file_path(self.hass)
+        if self._tado is None:
+            self._tado = await self.hass.async_add_executor_job(
+                Tado, self._token_file
+            )
+        return self._tado
+
+    async def _async_finish_setup(self, tado: Tado) -> ConfigFlowResult:
+        try:
+            tado_me = await self.hass.async_add_executor_job(tado.get_me)
+        except TadoException as ex:
+            raise InvalidAuth from ex
+        except requests.exceptions.RequestException as ex:
+            raise CannotConnect from ex
+
+        if not tado_me.homes:
+            raise NoHomes
+
+        home = tado_me.homes[0]
+        unique_id = str(home.id)
+        await self.async_set_unique_id(unique_id)
+        self._abort_if_unique_id_configured()
+
+        return self.async_create_entry(
+            title=home.name,
+            data={CONF_TOKEN_FILE: self._token_file},
+        )
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Handle the initial step."""
         errors = {}
+        tado = await self._async_get_tado()
+
         if user_input is not None:
             try:
-                validated = await validate_input(self.hass, user_input)
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
+                if tado.device_activation_status() != DeviceActivationStatus.COMPLETED:
+                    await self.hass.async_add_executor_job(tado.device_activation)
+                if tado.device_activation_status() == DeviceActivationStatus.COMPLETED:
+                    return await self._async_finish_setup(tado)
+                errors["base"] = "invalid_auth"
             except InvalidAuth:
                 errors["base"] = "invalid_auth"
-            except NoHomes:
-                errors["base"] = "no_homes"
-            except Exception:
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
 
-            if "base" not in errors:
-                await self.async_set_unique_id(validated[UNIQUE_ID])
-                self._abort_if_unique_id_configured()
-                return self.async_create_entry(
-                    title=validated["title"], data=user_input
-                )
+        if tado.device_activation_status() == DeviceActivationStatus.COMPLETED:
+            return await self._async_finish_setup(tado)
 
+        verification_url = tado.device_verification_url() or ""
         return self.async_show_form(
-            step_id="user", data_schema=DATA_SCHEMA, errors=errors
+            step_id="user",
+            data_schema=DATA_SCHEMA,
+            errors=errors,
+            description_placeholders={"url": verification_url},
         )
 
     async def async_step_homekit(
@@ -122,36 +132,39 @@ class TadoConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         reconfigure_entry = self._get_reconfigure_entry()
 
+        if self._token_file is None:
+            self._token_file = reconfigure_entry.data.get(
+                CONF_TOKEN_FILE
+            ) or _new_token_file_path(self.hass)
+            self._tado = None
+
+        tado = await self._async_get_tado()
+
         if user_input is not None:
-            user_input[CONF_USERNAME] = reconfigure_entry.data[CONF_USERNAME]
             try:
-                await validate_input(self.hass, user_input)
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
-            except PyTado.exceptions.TadoWrongCredentialsException:
+                if tado.device_activation_status() != DeviceActivationStatus.COMPLETED:
+                    await self.hass.async_add_executor_job(tado.device_activation)
+                if tado.device_activation_status() != DeviceActivationStatus.COMPLETED:
+                    errors["base"] = "invalid_auth"
+                else:
+                    return self.async_update_reload_and_abort(
+                        reconfigure_entry,
+                        data_updates={CONF_TOKEN_FILE: self._token_file},
+                    )
+            except TadoException:
                 errors["base"] = "invalid_auth"
-            except NoHomes:
-                errors["base"] = "no_homes"
+            except requests.exceptions.RequestException:
+                errors["base"] = "cannot_connect"
             except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "unknown"
 
-            if not errors:
-                return self.async_update_reload_and_abort(
-                    reconfigure_entry, data_updates=user_input
-                )
-
+        verification_url = tado.device_verification_url() or ""
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_PASSWORD): str,
-                }
-            ),
+            data_schema=DATA_SCHEMA,
             errors=errors,
-            description_placeholders={
-                CONF_USERNAME: reconfigure_entry.data[CONF_USERNAME]
-            },
+            description_placeholders={"url": verification_url},
         )
 
     @staticmethod

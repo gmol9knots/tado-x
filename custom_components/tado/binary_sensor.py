@@ -34,6 +34,30 @@ from .tado_connector import TadoConnector
 _LOGGER = logging.getLogger(__name__)
 
 
+def _power_on(data: Any) -> bool:
+    return str(getattr(data, "power", "")).upper() == "ON"
+
+
+def _link_connected(data: Any) -> bool:
+    if hasattr(data, "available"):
+        return bool(data.available)
+    link_state = getattr(data, "link", None)
+    if link_state is None:
+        return False
+    return str(link_state) in ("ONLINE", "CONNECTED")
+
+
+def _open_window_active(data: Any) -> bool:
+    return bool(getattr(data, "open_window", False))
+
+
+def _open_window_attributes(data: Any) -> dict[str, StateType]:
+    expiry = getattr(data, "open_window_expiry_seconds", None)
+    if expiry is None:
+        return {}
+    return {"expiry_seconds": expiry}
+
+
 @dataclass(frozen=True, kw_only=True)
 class TadoBinarySensorEntityDescription(BinarySensorEntityDescription):
     """Describes Tado binary sensor entity."""
@@ -62,12 +86,12 @@ TADO_X_CONNECTION_STATE_ENTITY_DESCRIPTION = TadoBinarySensorEntityDescription(
 )
 POWER_ENTITY_DESCRIPTION = TadoBinarySensorEntityDescription(
     key="power",
-    state_fn=lambda data: data.power == "ON",
+    state_fn=_power_on,
     device_class=BinarySensorDeviceClass.POWER,
 )
 LINK_ENTITY_DESCRIPTION = TadoBinarySensorEntityDescription(
     key="link",
-    state_fn=lambda data: data.link in ("ONLINE", "CONNECTED"),
+    state_fn=_link_connected,
     device_class=BinarySensorDeviceClass.CONNECTIVITY,
 )
 OVERLAY_ENTITY_DESCRIPTION = TadoBinarySensorEntityDescription(
@@ -81,8 +105,8 @@ OVERLAY_ENTITY_DESCRIPTION = TadoBinarySensorEntityDescription(
 )
 OPEN_WINDOW_ENTITY_DESCRIPTION = TadoBinarySensorEntityDescription(
     key="open window",
-    state_fn=lambda data: bool(data.open_window or data.open_window_detected),
-    attributes_fn=lambda data: data.open_window_attr,
+    state_fn=_open_window_active,
+    attributes_fn=_open_window_attributes,
     device_class=BinarySensorDeviceClass.WINDOW,
 )
 EARLY_START_ENTITY_DESCRIPTION = TadoBinarySensorEntityDescription(
