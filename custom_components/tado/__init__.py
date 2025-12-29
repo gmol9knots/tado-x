@@ -47,6 +47,17 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     setup_services(hass)
 
+    async def handle_set_offset(call):
+        device_id = call.data.get("entity_id")  # or separate device id
+        offset = call.data["temperature_offset"]
+        await async_set_temperature_offset(hass, device_id, offset)
+
+    hass.services.async_register(
+        DOMAIN,
+        "set_temperature_offset",
+        handle_set_offset,
+    )
+    
     return True
 
 
