@@ -1,6 +1,6 @@
 """Support for the (unofficial) Tado API."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 import logging
 
 import requests.exceptions
