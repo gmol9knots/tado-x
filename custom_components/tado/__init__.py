@@ -27,10 +27,13 @@ from .const import (
     CONF_DEVICE_TYPE_OFFSETS,
     CONF_DEVICE_ZONE_MAP,
     CONF_FALLBACK,
+    CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS,
     CONF_SCAN_INTERVAL,
     CONF_SCAN_INTERVAL_SECONDS,
+    CONF_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
     CONF_ZONE_SENSOR_MAP,
     DEFAULT_SCAN_INTERVAL_SECONDS,
+    DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
     CONF_TEMPERATURE_OFFSET,
     CONF_TOKEN_FILE,
     CONST_OVERLAY_MANUAL,
@@ -213,7 +216,7 @@ def _register_update_timer(
 ):
     interval = timedelta(seconds=max(1, scan_interval_seconds))
     return async_track_time_interval(
-        hass, lambda now: tado.update(), interval
+        hass, lambda now: tado.update(include_mobile_devices=False), interval
     )
 
 
@@ -266,6 +269,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: TadoConfigEntry) -> bool
     if scan_interval_seconds < 1:
         scan_interval_seconds = DEFAULT_SCAN_INTERVAL_SECONDS
 
+    temp_offset_refresh_interval_seconds = entry.options.get(
+        CONF_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
+        DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
+    )
+    try:
+        temp_offset_refresh_interval_seconds = int(
+            temp_offset_refresh_interval_seconds
+        )
+    except (TypeError, ValueError):
+        temp_offset_refresh_interval_seconds = DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS
+    if temp_offset_refresh_interval_seconds < 1:
+        temp_offset_refresh_interval_seconds = DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS
+
+    home_weather_refresh_interval_seconds = entry.options.get(
+        CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS
+    )
+    if home_weather_refresh_interval_seconds is None:
+        home_weather_refresh_interval_seconds = scan_interval_seconds
+    try:
+        home_weather_refresh_interval_seconds = int(
+            home_weather_refresh_interval_seconds
+        )
+    except (TypeError, ValueError):
+        home_weather_refresh_interval_seconds = scan_interval_seconds
+    if home_weather_refresh_interval_seconds < 1:
+        home_weather_refresh_interval_seconds = scan_interval_seconds
+
     legacy_override = entry.options.get(CONF_DEVICE_ID_OVERRIDE)
     legacy_offset = entry.options.get(CONF_TEMPERATURE_OFFSET)
     if legacy_override and not device_type_id_overrides:
@@ -291,6 +321,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: TadoConfigEntry) -> bool
         token_file,
         fallback,
         scan_interval_seconds=scan_interval_seconds,
+        temp_offset_refresh_interval_seconds=temp_offset_refresh_interval_seconds,
+        home_weather_refresh_interval_seconds=home_weather_refresh_interval_seconds,
         device_id_overrides=device_id_overrides,
         device_offsets=device_offsets,
         device_type_id_overrides=device_type_id_overrides,

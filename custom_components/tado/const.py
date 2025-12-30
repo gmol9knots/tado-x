@@ -50,6 +50,9 @@ CONF_ZONE_SENSOR_MAP = "zone_sensor_map"
 CONF_SCAN_INTERVAL = "scan_interval_minutes"
 CONF_SCAN_INTERVAL_SECONDS = "scan_interval_seconds"
 DEFAULT_SCAN_INTERVAL_SECONDS = 300
+CONF_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS = "temp_offset_refresh_interval_seconds"
+DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS = 900
+CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS = "home_weather_refresh_interval_seconds"
 DATA = "data"
 
 # Weather

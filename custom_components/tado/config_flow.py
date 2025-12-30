@@ -25,8 +25,11 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .const import (
     CONF_FALLBACK,
+    CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS,
     CONF_SCAN_INTERVAL,
     CONF_SCAN_INTERVAL_SECONDS,
+    CONF_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
+    DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
     DEFAULT_SCAN_INTERVAL_SECONDS,
     CONF_TOKEN_FILE,
     CONST_OVERLAY_TADO_DEFAULT,
@@ -403,8 +406,28 @@ class OptionsFlowHandler(OptionsFlow):
                 options[CONF_SCAN_INTERVAL_SECONDS] = user_input.get(
                     CONF_SCAN_INTERVAL_SECONDS
                 )
+            if CONF_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS in user_input:
+                options[CONF_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS] = user_input.get(
+                    CONF_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS
+                )
+            if CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS in user_input:
+                options[CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS] = user_input.get(
+                    CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS
+                )
             options.pop(CONF_SCAN_INTERVAL, None)
             return self.async_create_entry(data=options)
+
+        scan_interval_default = self.config_entry.options.get(
+            CONF_SCAN_INTERVAL_SECONDS,
+            self.config_entry.options.get(
+                CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_SECONDS // 60
+            )
+            * 60,
+        )
+        home_weather_default = self.config_entry.options.get(
+            CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS,
+            scan_interval_default,
+        )
 
         data_schema: dict[Any, Any] = {
             vol.Optional(
@@ -415,13 +438,18 @@ class OptionsFlowHandler(OptionsFlow):
             ): vol.In(CONST_OVERLAY_TADO_OPTIONS),
             vol.Optional(
                 CONF_SCAN_INTERVAL_SECONDS,
+                default=scan_interval_default,
+            ): vol.All(vol.Coerce(int), vol.Range(min=1)),
+            vol.Optional(
+                CONF_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
                 default=self.config_entry.options.get(
-                    CONF_SCAN_INTERVAL_SECONDS,
-                    self.config_entry.options.get(
-                        CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_SECONDS // 60
-                    )
-                    * 60,
+                    CONF_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
+                    DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
                 ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1)),
+            vol.Optional(
+                CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS,
+                default=home_weather_default,
             ): vol.All(vol.Coerce(int), vol.Range(min=1)),
         }
 

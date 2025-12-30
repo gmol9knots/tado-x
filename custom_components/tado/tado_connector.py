@@ -20,8 +20,10 @@ from .const import (
     CONF_DEVICE_ID_OVERRIDES,
     CONF_DEVICE_OFFSETS,
     CONF_DEVICE_ZONE_MAP,
+    CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS,
     CONF_SCAN_INTERVAL,
     CONF_SCAN_INTERVAL_SECONDS,
+    CONF_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
     CONF_ZONE_SENSOR_MAP,
     CONST_MODE_COOL,
     CONST_MODE_FAN,
@@ -35,7 +37,10 @@ from .const import (
     SIGNAL_TADO_MOBILE_DEVICE_UPDATE_RECEIVED,
     SIGNAL_TADO_UPDATE_RECEIVED,
     TEMP_OFFSET,
+    TADO_OFFSET_CELSIUS,
     TYPE_HEATING,
+    DEFAULT_SCAN_INTERVAL_SECONDS,
+    DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
 )
 
 SCAN_INTERVAL = timedelta(minutes=5)
@@ -54,6 +59,8 @@ class TadoConnector:
         token_file: str | None,
         fallback: str,
         scan_interval_seconds: int | None = None,
+        temp_offset_refresh_interval_seconds: int | None = None,
+        home_weather_refresh_interval_seconds: int | None = None,
         device_id_overrides: dict[str, str] | None = None,
         device_offsets: dict[str, float] | None = None,
         device_type_id_overrides: dict[str, str] | None = None,
@@ -102,6 +109,32 @@ class TadoConnector:
         )
         self._api_call_date = dt_util.now().date()
         self._api_call_count = 0
+        self._device_offset_last_updated: dict[str, datetime] = {}
+        try:
+            temp_offset_refresh = (
+                int(temp_offset_refresh_interval_seconds)
+                if temp_offset_refresh_interval_seconds is not None
+                else DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS
+            )
+        except (TypeError, ValueError):
+            temp_offset_refresh = DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS
+        if temp_offset_refresh < 1:
+            temp_offset_refresh = DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS
+        self._temp_offset_refresh_interval = timedelta(seconds=temp_offset_refresh)
+        try:
+            home_weather_refresh = (
+                int(home_weather_refresh_interval_seconds)
+                if home_weather_refresh_interval_seconds is not None
+                else self._scan_interval_seconds
+            )
+        except (TypeError, ValueError):
+            home_weather_refresh = self._scan_interval_seconds
+        if home_weather_refresh is None:
+            home_weather_refresh = DEFAULT_SCAN_INTERVAL_SECONDS
+        if home_weather_refresh < 1:
+            home_weather_refresh = DEFAULT_SCAN_INTERVAL_SECONDS
+        self._home_weather_refresh_interval = timedelta(seconds=home_weather_refresh)
+        self._home_weather_last_updated: datetime | None = None
 
         self.home_id: int = 0
         self.home_name = None
@@ -257,6 +290,12 @@ class TadoConnector:
         device_zone_map = options.get(CONF_DEVICE_ZONE_MAP, {})
         zone_sensor_map = options.get(CONF_ZONE_SENSOR_MAP, {})
         scan_interval = options.get(CONF_SCAN_INTERVAL_SECONDS)
+        temp_offset_refresh = options.get(
+            CONF_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS
+        )
+        home_weather_refresh = options.get(
+            CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS
+        )
         if scan_interval is None:
             scan_interval = options.get(CONF_SCAN_INTERVAL)
             if scan_interval is not None:
@@ -288,6 +327,34 @@ class TadoConnector:
             self._zone_sensor_map = self._normalize_zone_sensor_map(zone_sensor_map)
         if isinstance(scan_interval, int):
             self._scan_interval_seconds = scan_interval
+        if temp_offset_refresh is None:
+            temp_offset_refresh = DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS
+        try:
+            temp_offset_refresh = int(temp_offset_refresh)
+        except (TypeError, ValueError):
+            temp_offset_refresh = DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS
+        if temp_offset_refresh < 1:
+            temp_offset_refresh = DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS
+        self._temp_offset_refresh_interval = timedelta(
+            seconds=temp_offset_refresh
+        )
+
+        if home_weather_refresh is None:
+            if isinstance(scan_interval, int):
+                home_weather_refresh = scan_interval
+            else:
+                home_weather_refresh = self._scan_interval_seconds
+        if home_weather_refresh is None:
+            home_weather_refresh = DEFAULT_SCAN_INTERVAL_SECONDS
+        try:
+            home_weather_refresh = int(home_weather_refresh)
+        except (TypeError, ValueError):
+            home_weather_refresh = DEFAULT_SCAN_INTERVAL_SECONDS
+        if home_weather_refresh < 1:
+            home_weather_refresh = DEFAULT_SCAN_INTERVAL_SECONDS
+        self._home_weather_refresh_interval = timedelta(
+            seconds=home_weather_refresh
+        )
 
     def setup(self):
         """Connect to Tado and fetch the zones."""
@@ -757,6 +824,26 @@ class TadoConnector:
             return data.model_dump(by_alias=True)
         return {}
 
+    def _normalize_temp_offset_value(self, response: Any) -> Any:
+        if self.is_x:
+            if isinstance(response, (int, float)):
+                return float(response)
+            temp_offset = self._to_dict(response)
+            if temp_offset:
+                return temp_offset.get(TADO_OFFSET_CELSIUS)
+            return None
+        return self._to_dict(response)
+
+    def _resolve_device_data_key(self, device_id: str) -> str:
+        device_id_str = str(device_id)
+        if device_id_str in self.data["device"]:
+            return device_id_str
+        for key, device in self.data["device"].items():
+            for candidate in ("serialNumber", "serialNo", "shortSerialNo", "id"):
+                if str(device.get(candidate)) == device_id_str:
+                    return str(key)
+        return device_id_str
+
     def _normalize_device(self, device: Any, index: int | None = None) -> dict[str, Any]:
         device_dict = self._to_dict(device)
         device_dict["is_x"] = self.is_x
@@ -799,12 +886,20 @@ class TadoConnector:
                     offset = self._device_type_offsets["*"]
                 else:
                     continue
-            device_id = (
-                device.get("serialNumber")
-                or device.get("serialNo")
-                or device.get("shortSerialNo")
-                or device.get("id")
-            )
+            if self.is_x:
+                device_id = (
+                    device.get("serialNumber")
+                    or device.get("serialNo")
+                    or device.get("shortSerialNo")
+                    or device.get("id")
+                )
+            else:
+                device_id = (
+                    device.get("shortSerialNo")
+                    or device.get("serialNo")
+                    or device.get("serialNumber")
+                    or device.get("id")
+                )
             if not device_id:
                 _LOGGER.warning(
                     "Missing device id for offset on device %s: %s",
@@ -813,8 +908,14 @@ class TadoConnector:
                 )
                 continue
             try:
-                self._api_call(self.tado.set_temp_offset, device_id, offset)
+                response = self._api_call(self.tado.set_temp_offset, device_id, offset)
                 self._set_current_offset(device_key, float(offset))
+                device_id_key = self._resolve_device_data_key(device_id)
+                temp_offset = self._normalize_temp_offset_value(response)
+                if temp_offset is not None and temp_offset != {}:
+                    if device_id_key in self.data["device"]:
+                        self.data["device"][device_id_key][TEMP_OFFSET] = temp_offset
+                    self._device_offset_last_updated[device_id_key] = dt_util.utcnow()
                 _LOGGER.debug(
                     "Applied temperature offset %.2f to device %s (%s)",
                     offset,
@@ -862,16 +963,21 @@ class TadoConnector:
         """Return the Tado mobile devices."""
         return self._api_call(self.tado.get_mobile_devices)
 
-    def update(self):
+    def update(self, include_mobile_devices: bool = True):
         """Update the registered zones."""
         offset_calls = self.update_devices()
-        self.update_mobile_devices()
+        mobile_calls = 0
+        if include_mobile_devices:
+            self.update_mobile_devices()
+            mobile_calls = 1
         zone_info_calls, zone_state_calls = self.update_zones()
-        self.update_home()
+        home_calls = self.update_home()
         self._log_poll_summary(
             offset_calls=offset_calls,
             zone_info_calls=zone_info_calls,
             zone_state_calls=zone_state_calls,
+            mobile_calls=mobile_calls,
+            home_calls=home_calls,
         )
 
     def update_mobile_devices(self) -> None:
@@ -924,6 +1030,7 @@ class TadoConnector:
             )
             return offset_calls
 
+        now = dt_util.utcnow()
         for idx, device in enumerate(devices):
             device_info = self._normalize_device(device, idx)
             if self.is_x:
@@ -940,11 +1047,30 @@ class TadoConnector:
                         "capabilities", []
                     )
                     if INSIDE_TEMPERATURE_MEASUREMENT in capabilities:
-                        temp_offset = self._api_call(
-                            self.tado.get_temp_offset, device_id
+                        device_key = str(device_id)
+                        cached_offset = None
+                        if device_key in self.data["device"]:
+                            cached_offset = self.data["device"][device_key].get(
+                                TEMP_OFFSET
+                            )
+                        if cached_offset == {}:
+                            cached_offset = None
+                        last_updated = self._device_offset_last_updated.get(
+                            device_key
                         )
-                        device_info[TEMP_OFFSET] = self._to_dict(temp_offset)
-                        offset_calls += 1
+                        if (
+                            cached_offset is not None
+                            and last_updated is not None
+                            and now - last_updated < self._temp_offset_refresh_interval
+                        ):
+                            device_info[TEMP_OFFSET] = cached_offset
+                        else:
+                            temp_offset = self._api_call(
+                                self.tado.get_temp_offset, device_id
+                            )
+                            device_info[TEMP_OFFSET] = self._to_dict(temp_offset)
+                            offset_calls += 1
+                            self._device_offset_last_updated[device_key] = now
                 except (RuntimeError, TadoException):
                     _LOGGER.error(
                         "Unable to connect to Tado while updating device %s",
@@ -1022,6 +1148,8 @@ class TadoConnector:
         offset_calls: int,
         zone_info_calls: int,
         zone_state_calls: int,
+        mobile_calls: int,
+        home_calls: int,
     ) -> None:
         scan_interval = (
             f"{self._scan_interval_seconds}s"
@@ -1031,8 +1159,8 @@ class TadoConnector:
         mobile_interval = int(SCAN_MOBILE_DEVICE_INTERVAL.total_seconds())
         total_requests = (
             1
-            + 1
-            + 2
+            + mobile_calls
+            + home_calls
             + zone_info_calls
             + zone_state_calls
             + offset_calls
@@ -1041,7 +1169,7 @@ class TadoConnector:
         summary = (
             "Polling summary: scan_interval=%s mobile_interval=%ss "
             "zones=%s devices=%s mobile_devices=%s "
-            "requests_per_poll=%s api_calls_today=%s (device=1 mobile=1 home=2 "
+            "requests_per_poll=%s api_calls_today=%s (device=1 mobile=%s home=%s "
             "zone_info=%s zone_state=%s temp_offset=%s)"
             % (
                 scan_interval,
@@ -1051,6 +1179,8 @@ class TadoConnector:
                 len(self.data.get("mobile_device", {})),
                 total_requests,
                 api_calls_today,
+                mobile_calls,
+                home_calls,
                 zone_info_calls,
                 zone_state_calls,
                 offset_calls,
@@ -1089,15 +1219,28 @@ class TadoConnector:
             _LOGGER.debug("Zone %s unchanged", zone_id)
             self._zone_last_snapshot_log[zone_id] = now
 
-    def update_home(self):
+    def update_home(self, force: bool = False) -> int:
         """Update the home data from Tado."""
+        now = dt_util.utcnow()
+        if (
+            not force
+            and self._home_weather_last_updated is not None
+            and now - self._home_weather_last_updated
+            < self._home_weather_refresh_interval
+        ):
+            return 0
+
+        calls = 0
         try:
             self.data["weather"] = self._to_dict(
                 self._api_call(self.tado.get_weather)
             )
+            calls += 1
             self.data["geofence"] = self._to_dict(
                 self._api_call(self.tado.get_home_state)
             )
+            calls += 1
+            self._home_weather_last_updated = now
             dispatcher_send(
                 self.hass,
                 SIGNAL_TADO_UPDATE_RECEIVED.format(self.home_id, "home", "data"),
@@ -1106,7 +1249,7 @@ class TadoConnector:
             _LOGGER.error(
                 "Unable to connect to Tado while updating weather and geofence data"
             )
-            return
+        return calls
 
     def get_capabilities(self, zone_id):
         """Return the capabilities of the devices."""
@@ -1156,7 +1299,7 @@ class TadoConnector:
 
         # Update everything when changing modes
         self.update_zones()
-        self.update_home()
+        self.update_home(force=True)
 
     def set_zone_overlay(
         self,
@@ -1238,20 +1381,26 @@ class TadoConnector:
             _LOGGER.error("Missing device id for temperature offset")
             return
         try:
-            self._api_call(self.tado.set_temp_offset, device_id, offset)
+            response = self._api_call(self.tado.set_temp_offset, device_id, offset)
         except RequestException as exc:
             _LOGGER.error("Could not set temperature offset: %s", exc)
             return
+        device_id_key = self._resolve_device_data_key(device_id)
+        temp_offset = self._normalize_temp_offset_value(response)
+        if temp_offset is not None and temp_offset != {}:
+            if device_id_key in self.data["device"]:
+                self.data["device"][device_id_key][TEMP_OFFSET] = temp_offset
+            self._device_offset_last_updated[device_id_key] = dt_util.utcnow()
         if device_key is None:
             device_key = self._lookup_device_key_for_id(device_id)
         if device_key:
             self._set_current_offset(device_key, float(offset))
         else:
-            self._device_offsets_current[str(device_id)] = float(offset)
+            self._device_offsets_current[device_id_key] = float(offset)
 
         dispatcher_send(
             self.hass,
-            SIGNAL_TADO_UPDATE_RECEIVED.format(self.home_id, "device", device_id),
+            SIGNAL_TADO_UPDATE_RECEIVED.format(self.home_id, "device", device_id_key),
         )
 
         if update_devices:
