@@ -338,9 +338,15 @@ class TadoConnector:
         self._apply_device_offsets()
 
     def _extract_home_info(self, tado_me: Any) -> tuple[int, str, str | None]:
-        homes = getattr(tado_me, "homes", None)
-        if homes is None and isinstance(tado_me, dict):
-            homes = tado_me.get("homes", [])
+        homes: Any = None
+        if isinstance(tado_me, list):
+            homes = tado_me
+        else:
+            homes = getattr(tado_me, "homes", None)
+            if homes is None and isinstance(tado_me, dict):
+                homes = tado_me.get("homes") or tado_me.get("home") or []
+        if isinstance(homes, dict):
+            homes = [homes]
         if not homes:
             raise RuntimeError("No homes returned by Tado API")
         home = homes[0]
