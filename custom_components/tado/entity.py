@@ -1,5 +1,7 @@
 """Base class for Tado entity."""
 
+import logging
+
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 
@@ -13,36 +15,62 @@ class TadoDeviceEntity(Entity):
     _attr_should_poll = False
     _attr_has_entity_name = True
 
+    _LOGGER = logging.getLogger(__name__)
+
     def __init__(self, device_info: dict[str, str]) -> None:
         """Initialize a Tado device."""
         super().__init__()
         self._device_info = device_info
-        if device_info["is_x"]:
-            self.device_name = device_info["serialNumber"]
-            self.device_id = device_info["serialNumber"]
+        is_x = bool(device_info.get("is_x"))
+        if is_x:
+            serial = (
+                device_info.get("serialNumber")
+                or device_info.get("serialNo")
+                or device_info.get("shortSerialNo")
+                or device_info.get("id")
+                or device_info.get("device_key")
+            )
+            if serial is None:
+                serial = "unknown"
+                self._LOGGER.warning(
+                    "Missing serial number in Tado X device info: %s", device_info
+                )
+            self.device_name = str(serial)
+            self.device_id = str(serial)
             self._attr_device_info = DeviceInfo(
                 configuration_url=f"https://app.tado.com/en/main/settings/home/rooms-and-devices/device/{self.device_name}",
                 identifiers={(DOMAIN, self.device_id)},
                 name=self.device_name,
                 manufacturer=DEFAULT_NAME,
-                sw_version=device_info["firmwareVersion"],
-                model=device_info["type"],
-                via_device=(DOMAIN, device_info["serialNumber"]),
+                sw_version=device_info.get("firmwareVersion")
+                or device_info.get("currentFwVersion"),
+                model=device_info.get("type") or device_info.get("deviceType"),
             )
         else:
-            self.device_name = device_info["serialNo"]
-            self.device_id = device_info["shortSerialNo"]
+            serial_no = (
+                device_info.get("serialNo")
+                or device_info.get("serialNumber")
+                or device_info.get("device_key")
+            )
+            short_serial = (
+                device_info.get("shortSerialNo")
+                or device_info.get("id")
+                or device_info.get("device_key")
+            )
+            if serial_no is None or short_serial is None:
+                self._LOGGER.warning(
+                    "Missing serial number in Tado device info: %s", device_info
+                )
+            self.device_name = str(serial_no or short_serial or "unknown")
+            self.device_id = str(short_serial or serial_no or "unknown")
             self._attr_device_info = DeviceInfo(
                 configuration_url=f"https://app.tado.com/en/main/settings/rooms-and-devices/device/{self.device_name}",
                 identifiers={(DOMAIN, self.device_id)},
                 name=self.device_name,
                 manufacturer=DEFAULT_NAME,
-                sw_version=device_info["currentFwVersion"],
-                model=device_info["deviceType"],
-                via_device=(
-                    DOMAIN,
-                    device_info["serialNo"],
-                ),
+                sw_version=device_info.get("currentFwVersion")
+                or device_info.get("firmwareVersion"),
+                model=device_info.get("deviceType") or device_info.get("type"),
             )
 
 

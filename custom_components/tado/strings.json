@@ -31,15 +31,17 @@
       "no_homes": "There are no homes linked to this tado account.",
       "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
       "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
-      "activation_failed": "Device authorization not completed. Finish the browser flow and try again."
+      "activation_failed": "Device authorization not completed. Finish the browser flow and try again.",
+      "activation_pending": "Authorization still pending. Finish the browser flow, wait a moment, and try again."
     }
   },
   "options": {
     "step": {
       "init": {
-        "description": "Fallback mode lets you choose when to fallback to Smart Schedule from your manual zone overlay. (NEXT_TIME_BLOCK:= Change at next Smart Schedule change; MANUAL:= Dont change until you cancel; TADO_DEFAULT:= Change based on your setting in Tado App).",
+        "description": "Fallback mode lets you choose when to fallback to Smart Schedule from your manual zone overlay. (NEXT_TIME_BLOCK:= Change at next Smart Schedule change; MANUAL:= Dont change until you cancel; TADO_DEFAULT:= Change based on your setting in Tado App). Use the VA04/RU04 device entities \"Device ID Override\" and \"Device Offset\" for per-device values. Use the VA04/RU04 device entity \"Room\" to link a button to a room (multiple VA04/RU04 can point to the same room). Use the zone entity \"Reference Temperature Sensors\" to link one or more room sensors for automatic offset tuning.",
         "data": {
-          "fallback": "Choose fallback mode."
+          "fallback": "Choose fallback mode.",
+          "scan_interval_seconds": "Polling interval (seconds)."
         },
         "title": "Adjust Tado options."
       }

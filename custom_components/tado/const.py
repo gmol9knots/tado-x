@@ -38,6 +38,18 @@ TADO_HVAC_ACTION_TO_HA_HVAC_ACTION = {
 CONF_FALLBACK = "fallback"
 CONF_HOME_ID = "home_id"
 CONF_TOKEN_FILE = "token_file"
+CONF_DEVICE_ID_OVERRIDE = "device_id_override"
+CONF_TEMPERATURE_OFFSET = "temperature_offset"
+CONF_DEVICE_TYPE_ID_OVERRIDES = "device_type_id_overrides"
+CONF_DEVICE_TYPE_OFFSETS = "device_type_offsets"
+CONF_DEVICE_ID_OVERRIDES = "device_id_overrides"
+CONF_DEVICE_OFFSETS = "device_offsets"
+CONF_ZONE_DEVICE_MAP = "zone_device_map"
+CONF_DEVICE_ZONE_MAP = "device_zone_map"
+CONF_ZONE_SENSOR_MAP = "zone_sensor_map"
+CONF_SCAN_INTERVAL = "scan_interval_minutes"
+CONF_SCAN_INTERVAL_SECONDS = "scan_interval_seconds"
+DEFAULT_SCAN_INTERVAL_SECONDS = 300
 DATA = "data"
 
 # Weather
@@ -177,6 +189,9 @@ DEFAULT_TADO_PRECISION = 0.1
 # Constant for Auto Geolocation mode
 PRESET_AUTO = "auto"
 
+# Device types that support room linking and offsets.
+LINKABLE_DEVICE_PREFIXES = ("VA04", "RU04")
+
 SUPPORT_PRESET_AUTO = [PRESET_AWAY, PRESET_HOME, PRESET_AUTO]
 SUPPORT_PRESET_MANUAL = [PRESET_AWAY, PRESET_HOME]
 
@@ -199,6 +214,8 @@ DOMAIN = "tado"
 
 SIGNAL_TADO_UPDATE_RECEIVED = "tado_update_received_{}_{}_{}"
 SIGNAL_TADO_MOBILE_DEVICE_UPDATE_RECEIVED = "tado_mobile_device_update_received_{}"
+SIGNAL_ZONE_SENSOR_MAP_UPDATED = "tado_zone_sensor_map_updated_{}"
+SIGNAL_TADO_API_CALLS_UPDATED = "tado_api_calls_updated_{}"
 UNIQUE_ID = "unique_id"
 
 DEFAULT_NAME = "Tado"

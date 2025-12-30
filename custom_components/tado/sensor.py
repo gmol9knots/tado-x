@@ -16,6 +16,7 @@ from homeassistant.components.sensor import (
 from homeassistant.const import PERCENTAGE, UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 
@@ -24,6 +25,7 @@ from .const import (
     CONDITIONS_MAP,
     SENSOR_DATA_CATEGORY_GEOFENCE,
     SENSOR_DATA_CATEGORY_WEATHER,
+    SIGNAL_TADO_API_CALLS_UPDATED,
     SIGNAL_TADO_UPDATE_RECEIVED,
     TADO_LINE_X,
     TADO_PRE_LINE_X,
@@ -225,6 +227,7 @@ async def async_setup_entry(
             for entity_description in HOME_SENSORS
         ]
     )
+    entities.append(TadoApiCallSensor(tado))
 
     # Create zone sensors
     for zone in zones:
@@ -245,6 +248,44 @@ async def async_setup_entry(
         )
 
     async_add_entities(entities, True)
+
+
+class TadoApiCallSensor(TadoHomeEntity, SensorEntity):
+    """Representation of the Tado API call counter."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_name = "API Calls Today"
+    _attr_native_unit_of_measurement = "calls"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, tado: TadoConnector) -> None:
+        """Initialize the API call counter sensor."""
+        super().__init__(tado)
+        self._tado = tado
+        self._attr_unique_id = f"api_calls_today_{tado.home_id}"
+
+    async def async_added_to_hass(self) -> None:
+        """Register for API call counter updates."""
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                SIGNAL_TADO_API_CALLS_UPDATED.format(self._tado.home_id),
+                self._async_update_callback,
+            )
+        )
+        self.async_write_ha_state()
+
+    @property
+    def native_value(self) -> StateType:
+        return self._tado.get_api_call_count()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, StateType]:
+        return {"date": self._tado.get_api_call_date().isoformat()}
+
+    @callback
+    def _async_update_callback(self) -> None:
+        self.async_write_ha_state()
 
 
 class TadoHomeSensor(TadoHomeEntity, SensorEntity):
@@ -278,7 +319,8 @@ class TadoHomeSensor(TadoHomeEntity, SensorEntity):
     def _async_update_callback(self) -> None:
         """Update and write state."""
         self._async_update_home_data()
-        self.async_write_ha_state()
+        if self.hass:
+            self.hass.loop.call_soon_threadsafe(self.async_write_ha_state)
 
     @callback
     def _async_update_home_data(self) -> None:
@@ -338,7 +380,8 @@ class TadoZoneSensor(TadoZoneEntity, SensorEntity):
     def _async_update_callback(self) -> None:
         """Update and write state."""
         self._async_update_zone_data()
-        self.async_write_ha_state()
+        if self.hass:
+            self.hass.loop.call_soon_threadsafe(self.async_write_ha_state)
 
     @callback
     def _async_update_zone_data(self) -> None:

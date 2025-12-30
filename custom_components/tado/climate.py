@@ -321,11 +321,28 @@ class TadoClimate(TadoZoneEntity, ClimateEntity):
         self._attr_unique_id = f"{zone_type} {zone_id} {tado.home_id}"
 
         self._device_info = device_info
-        self._device_id = (
-            self._device_info["serialNumber"]
-            if self._tado.is_x
-            else self._device_info["shortSerialNo"]
-        )
+        if self._tado.is_x:
+            self._device_id = (
+                self._device_info.get("serialNumber")
+                or self._device_info.get("serialNo")
+                or self._device_info.get("shortSerialNo")
+                or self._device_info.get("id")
+                or self._tado.get_device_id_override(self._device_info)
+            )
+        else:
+            self._device_id = (
+                self._device_info.get("shortSerialNo")
+                or self._device_info.get("serialNo")
+                or self._device_info.get("serialNumber")
+                or self._device_info.get("id")
+            )
+        if not self._device_id:
+            _LOGGER.warning(
+                "Missing device id for zone %s (home %s) device info: %s",
+                zone_id,
+                tado.home_id,
+                self._device_info,
+            )
 
         self._ac_device = zone_type == TYPE_AIR_CONDITIONING
         self._attr_hvac_modes = supported_hvac_modes
@@ -643,6 +660,15 @@ class TadoClimate(TadoZoneEntity, ClimateEntity):
         """Load tado data into zone."""
         self._tado_zone_data = self._tado.data["zone"][self.zone_id]
 
+        if self._tado.is_x and not self._device_id:
+            self._device_id = (
+                self._device_info.get("serialNumber")
+                or self._device_info.get("serialNo")
+                or self._device_info.get("shortSerialNo")
+                or self._device_info.get("id")
+                or self._tado.get_device_id_override(self._device_info)
+            )
+
         if self._tado.is_x:
             if self._device_id in self._tado.data["device"]:
                 self._tado_zone_temp_offset["offset_celsius"] = self._tado.data[
@@ -682,7 +708,8 @@ class TadoClimate(TadoZoneEntity, ClimateEntity):
     def _async_update_zone_callback(self) -> None:
         """Load tado data and update state."""
         self._async_update_zone_data()
-        self.async_write_ha_state()
+        if self.hass:
+            self.hass.loop.call_soon_threadsafe(self.async_write_ha_state)
 
     @callback
     def _async_update_home_data(self) -> None:
@@ -693,7 +720,8 @@ class TadoClimate(TadoZoneEntity, ClimateEntity):
     def _async_update_home_callback(self) -> None:
         """Load tado data and update state."""
         self._async_update_home_data()
-        self.async_write_ha_state()
+        if self.hass:
+            self.hass.loop.call_soon_threadsafe(self.async_write_ha_state)
 
     def _normalize_target_temp_for_hvac_mode(self) -> None:
         def adjust_temp(min_temp, max_temp) -> float | None:

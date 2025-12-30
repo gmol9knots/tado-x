@@ -245,7 +245,8 @@ class TadoWaterHeater(TadoZoneEntity, WaterHeaterEntity):
     def _async_update_callback(self) -> None:
         """Load tado data and update state."""
         self._async_update_data()
-        self.async_write_ha_state()
+        if self.hass:
+            self.hass.loop.call_soon_threadsafe(self.async_write_ha_state)
 
     @callback
     def _async_update_data(self) -> None:

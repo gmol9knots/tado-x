@@ -133,7 +133,8 @@ class TadoDeviceTrackerEntity(TrackerEntity):
     def on_demand_update(self) -> None:
         """Update state on demand."""
         self.update_state()
-        self.async_write_ha_state()
+        if self.hass:
+            self.hass.loop.call_soon_threadsafe(self.async_write_ha_state)
 
     async def async_added_to_hass(self) -> None:
         """Register state update callback."""
