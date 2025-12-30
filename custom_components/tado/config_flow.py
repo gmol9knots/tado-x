@@ -26,9 +26,11 @@ from homeassistant.exceptions import HomeAssistantError
 from .const import (
     CONF_FALLBACK,
     CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS,
+    CONF_OFFSET_RECALC_INTERVAL_SECONDS,
     CONF_SCAN_INTERVAL,
     CONF_SCAN_INTERVAL_SECONDS,
     CONF_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
+    DEFAULT_OFFSET_RECALC_INTERVAL_SECONDS,
     DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
     DEFAULT_SCAN_INTERVAL_SECONDS,
     CONF_TOKEN_FILE,
@@ -410,6 +412,10 @@ class OptionsFlowHandler(OptionsFlow):
                 options[CONF_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS] = user_input.get(
                     CONF_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS
                 )
+            if CONF_OFFSET_RECALC_INTERVAL_SECONDS in user_input:
+                options[CONF_OFFSET_RECALC_INTERVAL_SECONDS] = user_input.get(
+                    CONF_OFFSET_RECALC_INTERVAL_SECONDS
+                )
             if CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS in user_input:
                 options[CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS] = user_input.get(
                     CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS
@@ -445,6 +451,13 @@ class OptionsFlowHandler(OptionsFlow):
                 default=self.config_entry.options.get(
                     CONF_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
                     DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1)),
+            vol.Optional(
+                CONF_OFFSET_RECALC_INTERVAL_SECONDS,
+                default=self.config_entry.options.get(
+                    CONF_OFFSET_RECALC_INTERVAL_SECONDS,
+                    DEFAULT_OFFSET_RECALC_INTERVAL_SECONDS,
                 ),
             ): vol.All(vol.Coerce(int), vol.Range(min=1)),
             vol.Optional(

@@ -834,6 +834,21 @@ class TadoConnector:
             return None
         return self._to_dict(response)
 
+    def _extract_temp_offset_value(self, temp_offset: Any) -> float | None:
+        if temp_offset is None or temp_offset == {}:
+            return None
+        if isinstance(temp_offset, (int, float)):
+            return float(temp_offset)
+        if isinstance(temp_offset, dict):
+            value = temp_offset.get(TADO_OFFSET_CELSIUS)
+            if isinstance(value, dict):
+                value = value.get("value")
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+        return None
+
     def _resolve_device_data_key(self, device_id: str) -> str:
         device_id_str = str(device_id)
         if device_id_str in self.data["device"]:
@@ -1033,6 +1048,9 @@ class TadoConnector:
         now = dt_util.utcnow()
         for idx, device in enumerate(devices):
             device_info = self._normalize_device(device, idx)
+            device_key = device_info.get("device_key") or self.get_device_key(
+                device_info, idx
+            )
             if self.is_x:
                 device_id = device_info.get("serialNumber")
             else:
@@ -1047,16 +1065,16 @@ class TadoConnector:
                         "capabilities", []
                     )
                     if INSIDE_TEMPERATURE_MEASUREMENT in capabilities:
-                        device_key = str(device_id)
+                        device_cache_key = str(device_id)
                         cached_offset = None
-                        if device_key in self.data["device"]:
-                            cached_offset = self.data["device"][device_key].get(
+                        if device_cache_key in self.data["device"]:
+                            cached_offset = self.data["device"][device_cache_key].get(
                                 TEMP_OFFSET
                             )
                         if cached_offset == {}:
                             cached_offset = None
                         last_updated = self._device_offset_last_updated.get(
-                            device_key
+                            device_cache_key
                         )
                         if (
                             cached_offset is not None
@@ -1070,13 +1088,19 @@ class TadoConnector:
                             )
                             device_info[TEMP_OFFSET] = self._to_dict(temp_offset)
                             offset_calls += 1
-                            self._device_offset_last_updated[device_key] = now
+                            self._device_offset_last_updated[device_cache_key] = now
                 except (RuntimeError, TadoException):
                     _LOGGER.error(
                         "Unable to connect to Tado while updating device %s",
                         device_id,
                     )
                     return offset_calls
+
+            temp_offset_value = self._extract_temp_offset_value(
+                device_info.get(TEMP_OFFSET)
+            )
+            if device_key and temp_offset_value is not None:
+                self._set_current_offset(device_key, temp_offset_value)
 
             self.data["device"][device_id] = device_info
             dispatcher_send(

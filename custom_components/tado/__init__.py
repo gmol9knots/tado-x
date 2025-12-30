@@ -28,12 +28,14 @@ from .const import (
     CONF_DEVICE_ZONE_MAP,
     CONF_FALLBACK,
     CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS,
+    CONF_OFFSET_RECALC_INTERVAL_SECONDS,
     CONF_SCAN_INTERVAL,
     CONF_SCAN_INTERVAL_SECONDS,
     CONF_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
     CONF_ZONE_SENSOR_MAP,
     DEFAULT_SCAN_INTERVAL_SECONDS,
     DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS,
+    DEFAULT_OFFSET_RECALC_INTERVAL_SECONDS,
     CONF_TEMPERATURE_OFFSET,
     CONF_TOKEN_FILE,
     CONST_OVERLAY_MANUAL,
@@ -220,11 +222,17 @@ def _register_update_timer(
     )
 
 
-def _register_offset_recalc_timer(hass: HomeAssistant, tado: TadoConnector):
-    interval = timedelta(minutes=15)
+def _register_offset_recalc_timer(
+    hass: HomeAssistant, tado: TadoConnector, recalc_interval_seconds: int
+):
+    interval = timedelta(seconds=max(1, recalc_interval_seconds))
+
+    async def _handle_offset_recalc(_now: datetime) -> None:
+        await hass.async_add_executor_job(tado.auto_adjust_offsets_all)
+
     return async_track_time_interval(
         hass,
-        lambda now: hass.async_add_executor_job(tado.auto_adjust_offsets_all),
+        _handle_offset_recalc,
         interval,
     )
 
@@ -281,6 +289,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: TadoConfigEntry) -> bool
         temp_offset_refresh_interval_seconds = DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS
     if temp_offset_refresh_interval_seconds < 1:
         temp_offset_refresh_interval_seconds = DEFAULT_TEMP_OFFSET_REFRESH_INTERVAL_SECONDS
+
+    offset_recalc_interval_seconds = entry.options.get(
+        CONF_OFFSET_RECALC_INTERVAL_SECONDS,
+        DEFAULT_OFFSET_RECALC_INTERVAL_SECONDS,
+    )
+    try:
+        offset_recalc_interval_seconds = int(offset_recalc_interval_seconds)
+    except (TypeError, ValueError):
+        offset_recalc_interval_seconds = DEFAULT_OFFSET_RECALC_INTERVAL_SECONDS
+    if offset_recalc_interval_seconds < 1:
+        offset_recalc_interval_seconds = DEFAULT_OFFSET_RECALC_INTERVAL_SECONDS
 
     home_weather_refresh_interval_seconds = entry.options.get(
         CONF_HOME_WEATHER_REFRESH_INTERVAL_SECONDS
@@ -353,7 +372,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: TadoConfigEntry) -> bool
     # Poll for updates in the background
     update_unsub = _register_update_timer(hass, tadoconnector, scan_interval_seconds)
     entry.async_on_unload(update_unsub)
-    offset_unsub = _register_offset_recalc_timer(hass, tadoconnector)
+    offset_unsub = _register_offset_recalc_timer(
+        hass, tadoconnector, offset_recalc_interval_seconds
+    )
     entry.async_on_unload(offset_unsub)
 
     entry.async_on_unload(
@@ -370,6 +391,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: TadoConfigEntry) -> bool
     hass.data[DOMAIN][entry.entry_id]["scan_interval"] = scan_interval_seconds
     hass.data[DOMAIN][entry.entry_id]["update_unsub"] = update_unsub
     hass.data[DOMAIN][entry.entry_id]["offset_unsub"] = offset_unsub
+    hass.data[DOMAIN][entry.entry_id][
+        "offset_recalc_interval"
+    ] = offset_recalc_interval_seconds
     sensor_unsub = _register_zone_sensor_listeners(
         hass, entry, tadoconnector, zone_sensor_map
     )
@@ -439,6 +463,28 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
         data["scan_interval"] = scan_interval
         data["update_unsub"] = update_unsub
 
+    offset_recalc_interval = entry.options.get(
+        CONF_OFFSET_RECALC_INTERVAL_SECONDS,
+        DEFAULT_OFFSET_RECALC_INTERVAL_SECONDS,
+    )
+    try:
+        offset_recalc_interval = int(offset_recalc_interval)
+    except (TypeError, ValueError):
+        offset_recalc_interval = DEFAULT_OFFSET_RECALC_INTERVAL_SECONDS
+    if offset_recalc_interval < 1:
+        offset_recalc_interval = DEFAULT_OFFSET_RECALC_INTERVAL_SECONDS
+
+    if offset_recalc_interval != data.get("offset_recalc_interval"):
+        if data.get("offset_unsub"):
+            data["offset_unsub"]()
+            data["offset_unsub"] = None
+        offset_unsub = _register_offset_recalc_timer(
+            hass, tado, offset_recalc_interval
+        )
+        entry.async_on_unload(offset_unsub)
+        data["offset_recalc_interval"] = offset_recalc_interval
+        data["offset_unsub"] = offset_unsub
+
     zone_sensor_map = _normalize_zone_sensor_map(
         entry.options.get(CONF_ZONE_SENSOR_MAP, {})
     )
@@ -482,8 +528,13 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
                 ", ".join(linked) if linked else "none",
             )
         if zone_sensor_map:
+            recalc_interval = data.get(
+                "offset_recalc_interval",
+                DEFAULT_OFFSET_RECALC_INTERVAL_SECONDS,
+            )
             _LOGGER.info(
-                "Zone sensor listeners refreshed; auto offset recalculation timer active (15 min)."
+                "Zone sensor listeners refreshed; auto offset recalculation timer active (every %s seconds).",
+                recalc_interval,
             )
         dispatcher_send(
             hass,

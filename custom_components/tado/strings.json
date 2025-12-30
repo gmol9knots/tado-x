@@ -43,6 +43,7 @@
           "fallback": "Choose fallback mode.",
           "scan_interval_seconds": "Polling interval (seconds).",
           "temp_offset_refresh_interval_seconds": "Temperature offset refresh interval (seconds).",
+          "offset_recalc_interval_seconds": "Offset recalculation interval (seconds).",
           "home_weather_refresh_interval_seconds": "Home/weather refresh interval (seconds)."
         },
         "title": "Adjust Tado options."
