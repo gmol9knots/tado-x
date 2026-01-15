@@ -16,7 +16,6 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import dispatcher_send
 from homeassistant.helpers.event import (
     async_call_later,
-    async_listen_once,
     async_track_state_change_event,
     async_track_time_interval,
 )
@@ -296,7 +295,7 @@ def _schedule_initial_offset_recalc(
     def _handle_start(_event) -> None:
         async_call_later(hass, 5, _run)
 
-    async_listen_once(hass, EVENT_HOMEASSISTANT_STARTED, _handle_start)
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _handle_start)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: TadoConfigEntry) -> bool:
