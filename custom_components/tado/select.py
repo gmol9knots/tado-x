@@ -7,6 +7,7 @@ from typing import Any
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.const import UnitOfTemperature
+from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
@@ -166,6 +167,14 @@ class TadoZoneTempSensorSelect(TadoZoneEntity, SelectEntity):
         )
 
     def _handle_zone_sensor_map_update(self) -> None:
+        if not self.hass:
+            return
+        self.hass.loop.call_soon_threadsafe(
+            self._async_handle_zone_sensor_map_update
+        )
+
+    @callback
+    def _async_handle_zone_sensor_map_update(self) -> None:
         linked = self._get_linked_sensors()
         self._set_linked_sensors(linked)
         self.async_write_ha_state()
