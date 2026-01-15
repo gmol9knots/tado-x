@@ -242,7 +242,10 @@ def create_climate_entity(
         heat_temperatures = capabilities["temperatures"]
 
     if cool_temperatures is None and heat_temperatures is None and not tado.is_x:
-        _LOGGER.debug("Not adding zone %s since it has no temperatures", name)
+        _LOGGER.debug(
+            "Not adding zone %s since it has no temperatures",
+            tado.get_zone_label(zone_id),
+        )
         return None
 
     heat_min_temp: float | None = None
@@ -787,16 +790,16 @@ class TadoClimate(TadoZoneEntity, ClimateEntity):
 
         if self._current_tado_hvac_mode == CONST_MODE_OFF:
             _LOGGER.debug(
-                "Switching to OFF for zone %s (%d)", self.zone_name, self.zone_id
+                "Switching to OFF for zone %s",
+                self._tado.get_zone_label(self.zone_id),
             )
             self._tado.set_zone_off(self.zone_id, CONST_OVERLAY_MANUAL, self.zone_type)
             return
 
         if self._current_tado_hvac_mode == CONST_MODE_SMART_SCHEDULE:
             _LOGGER.debug(
-                "Switching to SMART_SCHEDULE for zone %s (%d)",
-                self.zone_name,
-                self.zone_id,
+                "Switching to SMART_SCHEDULE for zone %s",
+                self._tado.get_zone_label(self.zone_id),
             )
             self._tado.reset_zone_overlay(self.zone_id)
             return
@@ -815,12 +818,11 @@ class TadoClimate(TadoZoneEntity, ClimateEntity):
         )
         _LOGGER.debug(
             (
-                "Switching to %s for zone %s (%d) with temperature %s °C and duration"
+                "Switching to %s for zone %s with temperature %s °C and duration"
                 " %s using overlay %s"
             ),
             self._current_tado_hvac_mode,
-            self.zone_name,
-            self.zone_id,
+            self._tado.get_zone_label(self.zone_id),
             self._target_temp,
             duration,
             overlay_mode,

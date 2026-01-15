@@ -274,16 +274,16 @@ class TadoWaterHeater(TadoZoneEntity, WaterHeaterEntity):
 
         if self._current_tado_hvac_mode == CONST_MODE_SMART_SCHEDULE:
             _LOGGER.debug(
-                "Switching to SMART_SCHEDULE for zone %s (%d)",
-                self.zone_name,
-                self.zone_id,
+                "Switching to SMART_SCHEDULE for zone %s",
+                self._tado.get_zone_label(self.zone_id),
             )
             self._tado.reset_zone_overlay(self.zone_id)
             return
 
         if self._current_tado_hvac_mode == CONST_MODE_OFF:
             _LOGGER.debug(
-                "Switching to OFF for zone %s (%d)", self.zone_name, self.zone_id
+                "Switching to OFF for zone %s",
+                self._tado.get_zone_label(self.zone_id),
             )
             self._tado.set_zone_off(self.zone_id, CONST_OVERLAY_MANUAL, TYPE_HOT_WATER)
             return
@@ -300,10 +300,9 @@ class TadoWaterHeater(TadoZoneEntity, WaterHeaterEntity):
             overlay_mode=overlay_mode,
         )
         _LOGGER.debug(
-            "Switching to %s for zone %s (%d) with temperature %s",
+            "Switching to %s for zone %s with temperature %s",
             self._current_tado_hvac_mode,
-            self.zone_name,
-            self.zone_id,
+            self._tado.get_zone_label(self.zone_id),
             self._target_temp,
         )
         self._tado.set_zone_overlay(

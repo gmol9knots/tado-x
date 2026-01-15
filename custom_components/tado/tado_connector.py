@@ -11,9 +11,10 @@ from PyTado.interface import Tado
 from requests import RequestException
 
 from homeassistant.components.climate import PRESET_AWAY, PRESET_HOME
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.dispatcher import dispatcher_send
+from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -45,6 +46,8 @@ from .const import (
 
 SCAN_INTERVAL = timedelta(minutes=5)
 SCAN_MOBILE_DEVICE_INTERVAL = timedelta(seconds=30)
+SENSOR_RETRY_INTERVAL_SECONDS = 10
+SENSOR_RETRY_LOG_INTERVAL = timedelta(minutes=1)
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -103,6 +106,11 @@ class TadoConnector:
         self._zone_last_no_change_log: dict[int, datetime] = {}
         self._zone_last_snapshot: dict[int, tuple[Any, ...]] = {}
         self._zone_last_snapshot_log: dict[int, datetime] = {}
+        self._zone_last_invalid_sensor_log: dict[int, datetime] = {}
+        self._zone_sensor_retry_unsub: dict[int, Callable[[], None]] = {}
+        self._zone_last_raw_temp: dict[int, float] = {}
+        self._zone_last_temp_stamp: dict[int, Any] = {}
+        self._zone_last_current_temp: dict[int, float] = {}
         self._last_poll_summary: str | None = None
         self._scan_interval_seconds = (
             int(scan_interval_seconds) if scan_interval_seconds is not None else None
@@ -325,6 +333,7 @@ class TadoConnector:
             }
         if isinstance(zone_sensor_map, dict):
             self._zone_sensor_map = self._normalize_zone_sensor_map(zone_sensor_map)
+            self._cancel_unmapped_zone_sensor_retries()
         if isinstance(scan_interval, int):
             self._scan_interval_seconds = scan_interval
         if temp_offset_refresh is None:
@@ -659,6 +668,7 @@ class TadoConnector:
         zone_label = self.get_zone_label(zone_id)
         sensor_ids = self._normalize_zone_sensors(self._zone_sensor_map.get(zone_key))
         if not sensor_ids:
+            self._cancel_zone_sensor_retry(zone_id)
             return
         sensor_temps: list[float] = []
         for sensor_id in sensor_ids:
@@ -674,13 +684,19 @@ class TadoConnector:
                     "Invalid sensor value for %s: %s", sensor_id, sensor_state.state
                 )
         if not sensor_temps:
-            _LOGGER.warning(
-                "No valid sensor temperature for zone %s (sensors: %s)",
-                zone_label,
-                ", ".join(sensor_ids),
-            )
+            now = datetime.now()
+            last_log = self._zone_last_invalid_sensor_log.get(zone_id)
+            if last_log is None or now - last_log >= SENSOR_RETRY_LOG_INTERVAL:
+                _LOGGER.warning(
+                    "No valid sensor temperature for zone %s (sensors: %s)",
+                    zone_label,
+                    ", ".join(sensor_ids),
+                )
+                self._zone_last_invalid_sensor_log[zone_id] = now
+            self._schedule_zone_sensor_retry(zone_id)
             return
         sensor_temp = min(sensor_temps)
+        self._cancel_zone_sensor_retry(zone_id)
 
         zone_data = self.data["zone"].get(zone_id)
         if zone_data is None:
@@ -706,7 +722,22 @@ class TadoConnector:
                 current_offsets.append(float(offset_value))
 
         avg_offset = sum(current_offsets) / len(current_offsets) if current_offsets else 0.0
-        raw_temp = current_temp - avg_offset
+        raw_temp = None
+        zone_temp_stamp = getattr(zone_data, "current_temp_timestamp", None)
+        if zone_temp_stamp is not None:
+            last_stamp = self._zone_last_temp_stamp.get(zone_id)
+            if last_stamp == zone_temp_stamp:
+                raw_temp = self._zone_last_raw_temp.get(zone_id)
+        else:
+            last_temp = self._zone_last_current_temp.get(zone_id)
+            if last_temp is not None and abs(current_temp - last_temp) < 0.01:
+                raw_temp = self._zone_last_raw_temp.get(zone_id)
+        if raw_temp is None:
+            raw_temp = current_temp - avg_offset
+            self._zone_last_raw_temp[zone_id] = raw_temp
+            self._zone_last_current_temp[zone_id] = current_temp
+            if zone_temp_stamp is not None:
+                self._zone_last_temp_stamp[zone_id] = zone_temp_stamp
         target_offset = sensor_temp - raw_temp
         target_offset = max(-10.0, min(10.0, target_offset))
         target_offset = round(target_offset, 1)
@@ -761,6 +792,58 @@ class TadoConnector:
             if last_no_change is None or now - last_no_change >= timedelta(minutes=5):
                 _LOGGER.debug("Auto offset: no changes for zone %s", zone_label)
                 self._zone_last_no_change_log[zone_id] = now
+
+    def _schedule_zone_sensor_retry(self, zone_id: int) -> None:
+        if zone_id in self._zone_sensor_retry_unsub:
+            return
+        if not self.hass:
+            return
+
+        def _schedule() -> None:
+            if zone_id in self._zone_sensor_retry_unsub:
+                return
+
+            @callback
+            def _handle_retry(_now: datetime) -> None:
+                self._zone_sensor_retry_unsub.pop(zone_id, None)
+                self.hass.async_add_executor_job(
+                    self._auto_adjust_offsets, zone_id, True
+                )
+
+            self._zone_sensor_retry_unsub[zone_id] = async_call_later(
+                self.hass, SENSOR_RETRY_INTERVAL_SECONDS, _handle_retry
+            )
+
+        self.hass.loop.call_soon_threadsafe(_schedule)
+
+    def _cancel_zone_sensor_retry(self, zone_id: int) -> None:
+        unsub = self._zone_sensor_retry_unsub.pop(zone_id, None)
+        if unsub is None or not self.hass:
+            return
+
+        def _cancel() -> None:
+            try:
+                unsub()
+            except Exception:
+                _LOGGER.debug(
+                    "Failed to cancel zone sensor retry for zone %s",
+                    self.get_zone_label(zone_id),
+                )
+
+        self.hass.loop.call_soon_threadsafe(_cancel)
+
+    def _cancel_unmapped_zone_sensor_retries(self) -> None:
+        if not self._zone_sensor_retry_unsub:
+            return
+        mapped: set[int] = set()
+        for zone_key in self._zone_sensor_map:
+            try:
+                mapped.add(int(zone_key))
+            except (TypeError, ValueError):
+                continue
+        for zone_id in list(self._zone_sensor_retry_unsub):
+            if zone_id not in mapped:
+                self._cancel_zone_sensor_retry(zone_id)
 
     def auto_adjust_offsets_for_sensor(self, sensor_id: str, force: bool = False) -> None:
         """Auto adjust offsets based on a sensor update."""
