@@ -160,7 +160,9 @@ def create_climate_entity(
 ) -> TadoClimate | None:
     """Create a Tado climate entity."""
     capabilities = tado.get_capabilities(zone_id)
-    _LOGGER.debug("Capabilities for zone %s: %s", zone_id, capabilities)
+    _LOGGER.debug(
+        "Capabilities for zone %s: %s", tado.get_zone_label(zone_id), capabilities
+    )
 
     zone_type = capabilities["type"]
     support_flags = (
@@ -339,7 +341,7 @@ class TadoClimate(TadoZoneEntity, ClimateEntity):
         if not self._device_id:
             _LOGGER.warning(
                 "Missing device id for zone %s (home %s) device info: %s",
-                zone_id,
+                self._tado.get_zone_label(zone_id),
                 tado.home_id,
                 self._device_info,
             )

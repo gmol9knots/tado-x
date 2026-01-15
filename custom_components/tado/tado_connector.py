@@ -656,6 +656,7 @@ class TadoConnector:
         if not self._device_zone_map or not self._zone_sensor_map:
             return
         zone_key = str(zone_id)
+        zone_label = self.get_zone_label(zone_id)
         sensor_ids = self._normalize_zone_sensors(self._zone_sensor_map.get(zone_key))
         if not sensor_ids:
             return
@@ -675,7 +676,7 @@ class TadoConnector:
         if not sensor_temps:
             _LOGGER.warning(
                 "No valid sensor temperature for zone %s (sensors: %s)",
-                zone_id,
+                zone_label,
                 ", ".join(sensor_ids),
             )
             return
@@ -747,7 +748,7 @@ class TadoConnector:
         if applied:
             _LOGGER.debug(
                 "Auto offset: zone %s sensor=%.2f zone=%.2f raw=%.2f avg_offset=%.2f target=%.2f devices=%s",
-                zone_id,
+                zone_label,
                 sensor_temp,
                 current_temp,
                 raw_temp,
@@ -758,7 +759,7 @@ class TadoConnector:
         else:
             last_no_change = self._zone_last_no_change_log.get(zone_id)
             if last_no_change is None or now - last_no_change >= timedelta(minutes=5):
-                _LOGGER.debug("Auto offset: no changes for zone %s", zone_id)
+                _LOGGER.debug("Auto offset: no changes for zone %s", zone_label)
                 self._zone_last_no_change_log[zone_id] = now
 
     def auto_adjust_offsets_for_sensor(self, sensor_id: str, force: bool = False) -> None:
@@ -972,6 +973,27 @@ class TadoConnector:
             return zone.get("name") or zone.get("roomName") or zone.get("room_name")
         return getattr(zone, "name", None) or getattr(zone, "room_name", None)
 
+    def get_zone_label(self, zone_id: int | str | None) -> str:
+        """Return a friendly zone label using the id and name if available."""
+        if zone_id is None:
+            return "unknown"
+        try:
+            zone_id_int = int(zone_id)
+        except (TypeError, ValueError):
+            return str(zone_id)
+        zone_name = None
+        zone = getattr(self, "_zones_by_id", {}).get(zone_id_int)
+        if zone is not None:
+            zone_name = self._get_zone_name(zone)
+        if zone_name is None:
+            for zone_entry in getattr(self, "zones", []) or []:
+                if zone_entry.get("id") == zone_id_int:
+                    zone_name = zone_entry.get("name")
+                    break
+        if zone_name:
+            return f"{zone_id_int} ({zone_name})"
+        return str(zone_id_int)
+
     def _get_zone_devices(self, zone: Any) -> list[Any]:
         if isinstance(zone, dict):
             return zone.get("devices", [])
@@ -1128,6 +1150,7 @@ class TadoConnector:
         """Update the internal data from Tado."""
         zone_info_calls = 0
         zone_state_calls = 0
+        zone_label = self.get_zone_label(zone_id)
         zone = self._zones_by_id.get(zone_id)
         if zone is None:
             try:
@@ -1135,7 +1158,7 @@ class TadoConnector:
                 zone_info_calls += 1
             except (RuntimeError, TadoException):
                 _LOGGER.error(
-                    "Unable to connect to Tado while updating zone %s", zone_id
+                    "Unable to connect to Tado while updating zone %s", zone_label
                 )
                 return zone_info_calls, zone_state_calls
             self._zones_by_id[zone_id] = zone
@@ -1146,7 +1169,7 @@ class TadoConnector:
                 zone_state_calls += 1
             except (RuntimeError, TadoException):
                 _LOGGER.error(
-                    "Unable to connect to Tado while updating zone %s", zone_id
+                    "Unable to connect to Tado while updating zone %s", zone_label
                 )
                 return zone_info_calls, zone_state_calls
             if isinstance(zone_state, dict):
@@ -1236,14 +1259,15 @@ class TadoConnector:
         snapshot = self._zone_snapshot(zone_data)
         previous = self._zone_last_snapshot.get(zone_id)
         now = dt_util.utcnow()
+        zone_label = self.get_zone_label(zone_id)
         if snapshot != previous:
             self._zone_last_snapshot[zone_id] = snapshot
             self._zone_last_snapshot_log[zone_id] = now
-            _LOGGER.debug("Zone %s changed", zone_id)
+            _LOGGER.debug("Zone %s changed", zone_label)
             return
         last_log = self._zone_last_snapshot_log.get(zone_id)
         if last_log is None or now - last_log >= timedelta(minutes=5):
-            _LOGGER.debug("Zone %s unchanged", zone_id)
+            _LOGGER.debug("Zone %s unchanged", zone_label)
             self._zone_last_snapshot_log[zone_id] = now
 
     def update_home(self, force: bool = False) -> int:
@@ -1348,7 +1372,7 @@ class TadoConnector:
                 "Set overlay for zone %s: overlay_mode=%s, temp=%s, duration=%s,"
                 " type=%s, mode=%s fan_speed=%s swing=%s fan_level=%s vertical_swing=%s horizontal_swing=%s"
             ),
-            zone_id,
+            self.get_zone_label(zone_id),
             overlay_mode,
             temperature,
             duration,

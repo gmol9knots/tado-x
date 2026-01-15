@@ -8,13 +8,15 @@ import re
 from PyTado.exceptions import TadoException
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import dispatcher_send
 from homeassistant.helpers.event import (
+    async_call_later,
+    async_listen_once,
     async_track_state_change_event,
     async_track_time_interval,
 )
@@ -276,6 +278,27 @@ def _register_offset_recalc_timer(
     )
 
 
+def _schedule_initial_offset_recalc(
+    hass: HomeAssistant, tado: TadoConnector, zone_sensor_map: dict
+) -> None:
+    if not zone_sensor_map:
+        return
+
+    @callback
+    def _run(_now: datetime | None = None) -> None:
+        hass.async_add_executor_job(tado.auto_adjust_offsets_all)
+
+    if hass.is_running:
+        async_call_later(hass, 5, _run)
+        return
+
+    @callback
+    def _handle_start(_event) -> None:
+        async_call_later(hass, 5, _run)
+
+    async_listen_once(hass, EVENT_HOMEASSISTANT_STARTED, _handle_start)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: TadoConfigEntry) -> bool:
     """Set up Tado from a config entry."""
 
@@ -440,6 +463,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: TadoConfigEntry) -> bool
         entry.async_on_unload(sensor_unsub)
         hass.data[DOMAIN][entry.entry_id]["sensor_unsub"] = sensor_unsub
 
+    _schedule_initial_offset_recalc(hass, tadoconnector, zone_sensor_map)
+
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     entry.runtime_data = tadoconnector
@@ -548,7 +573,7 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
         }
         for zone_id, sensors in added.items():
             zone_name = zone_name_map.get(zone_id)
-            zone_label = f"{zone_name} ({zone_id})" if zone_name else zone_id
+            zone_label = f"{zone_id} ({zone_name})" if zone_name else zone_id
             linked = zone_sensor_map.get(zone_id, [])
             _LOGGER.info(
                 "Linked temperature sensor(s) %s to zone %s. Now linked: %s",
@@ -558,7 +583,7 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
             )
         for zone_id, sensors in removed.items():
             zone_name = zone_name_map.get(zone_id)
-            zone_label = f"{zone_name} ({zone_id})" if zone_name else zone_id
+            zone_label = f"{zone_id} ({zone_name})" if zone_name else zone_id
             linked = zone_sensor_map.get(zone_id, [])
             _LOGGER.info(
                 "Unlinked temperature sensor(s) %s from zone %s. Now linked: %s",
