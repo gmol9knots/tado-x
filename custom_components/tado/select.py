@@ -205,14 +205,7 @@ class TadoZoneTempSensorSelect(TadoZoneEntity, SelectEntity):
         for sensor_id in self._linked_sensors:
             if sensor_id not in options:
                 options.append(sensor_id)
-        if len(self._linked_sensors) > 1:
-            multi_label = self._multi_option_label()
-            if multi_label not in options:
-                options.insert(1, multi_label)
         return options
-
-    def _multi_option_label(self) -> str:
-        return f"Linked sensors ({len(self._linked_sensors)})"
 
     def _normalize_sensor_list(self, value: Any) -> list[str]:
         if value is None:
@@ -233,7 +226,10 @@ class TadoZoneTempSensorSelect(TadoZoneEntity, SelectEntity):
             if not item_str or item_str in result:
                 continue
             result.append(item_str)
-        return result
+        if not result:
+            return []
+        # Keep only the most recently linked sensor; multi-sensor linking is disabled.
+        return [result[-1]]
 
     def _get_linked_sensors(self) -> list[str]:
         zone_map = self._entry.options.get(CONF_ZONE_SENSOR_MAP, {})
@@ -244,9 +240,7 @@ class TadoZoneTempSensorSelect(TadoZoneEntity, SelectEntity):
     def _get_current_option(self) -> str:
         if not self._linked_sensors:
             return UNASSIGNED_OPTION
-        if len(self._linked_sensors) == 1:
-            return self._linked_sensors[0]
-        return self._multi_option_label()
+        return self._linked_sensors[0]
 
     def _set_linked_sensors(self, sensors: list[str]) -> None:
         self._linked_sensors = sensors
@@ -260,21 +254,12 @@ class TadoZoneTempSensorSelect(TadoZoneEntity, SelectEntity):
         """Handle option selection."""
         options = dict(self._entry.options)
         zone_map = dict(options.get(CONF_ZONE_SENSOR_MAP, {}))
-        linked = self._normalize_sensor_list(zone_map.get(str(self._zone_id)))
         if option == UNASSIGNED_OPTION:
             zone_map.pop(str(self._zone_id), None)
             linked = []
-        elif option == self._multi_option_label():
-            return
         else:
-            if option in linked:
-                linked.remove(option)
-            else:
-                linked.append(option)
-            if linked:
-                zone_map[str(self._zone_id)] = linked
-            else:
-                zone_map.pop(str(self._zone_id), None)
+            zone_map[str(self._zone_id)] = option
+            linked = [option]
         options[CONF_ZONE_SENSOR_MAP] = zone_map
         self.hass.config_entries.async_update_entry(self._entry, options=options)
         self._set_linked_sensors(linked)

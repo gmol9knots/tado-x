@@ -801,7 +801,10 @@ class TadoConnector:
             if not item_str or item_str in result:
                 continue
             result.append(item_str)
-        return result
+        if not result:
+            return []
+        # Keep only the most recently linked sensor; multi-sensor linking is disabled.
+        return [result[-1]]
 
     def _normalize_zone_sensor_map(
         self, zone_sensor_map: dict[str, Any] | None

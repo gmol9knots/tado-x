@@ -98,7 +98,10 @@ def _normalize_sensor_list(value: Any) -> list[str]:
         if not item_str or item_str in result:
             continue
         result.append(item_str)
-    return result
+    if not result:
+        return []
+    # Keep only the most recently linked sensor; multi-sensor linking is disabled.
+    return [result[-1]]
 
 
 def _flatten_zone_sensor_map(zone_sensor_map: dict | None) -> list[str]:
@@ -174,10 +177,7 @@ class TadoZoneSensorSwitch(TadoZoneEntity, SwitchEntity):
         """Enable this temperature sensor for the zone."""
         options = dict(self._entry.options)
         zone_map = dict(options.get(CONF_ZONE_SENSOR_MAP, {}))
-        sensors = _normalize_sensor_list(zone_map.get(str(self._zone_id)))
-        if self._sensor_entity_id not in sensors:
-            sensors.append(self._sensor_entity_id)
-        zone_map[str(self._zone_id)] = sensors
+        zone_map[str(self._zone_id)] = self._sensor_entity_id
         options[CONF_ZONE_SENSOR_MAP] = zone_map
         self.hass.config_entries.async_update_entry(self._entry, options=options)
         self.async_write_ha_state()
@@ -188,10 +188,6 @@ class TadoZoneSensorSwitch(TadoZoneEntity, SwitchEntity):
         zone_map = dict(options.get(CONF_ZONE_SENSOR_MAP, {}))
         sensors = _normalize_sensor_list(zone_map.get(str(self._zone_id)))
         if self._sensor_entity_id in sensors:
-            sensors.remove(self._sensor_entity_id)
-        if sensors:
-            zone_map[str(self._zone_id)] = sensors
-        else:
             zone_map.pop(str(self._zone_id), None)
         options[CONF_ZONE_SENSOR_MAP] = zone_map
         self.hass.config_entries.async_update_entry(self._entry, options=options)

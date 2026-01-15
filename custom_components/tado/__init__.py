@@ -12,6 +12,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import dispatcher_send
 from homeassistant.helpers.event import (
     async_track_state_change_event,
@@ -58,7 +59,6 @@ PLATFORMS = [
     Platform.NUMBER,
     Platform.SELECT,
     Platform.SENSOR,
-    Platform.SWITCH,
     Platform.TEXT,
     Platform.WATER_HEATER,
 ]
@@ -135,7 +135,10 @@ def _normalize_zone_sensors(value) -> list[str]:
         if not item_str or item_str in result:
             continue
         result.append(item_str)
-    return result
+    if not result:
+        return []
+    # Keep only the most recently linked sensor; multi-sensor linking is disabled.
+    return [result[-1]]
 
 
 def _normalize_zone_sensor_map(zone_sensor_map: dict | None) -> dict[str, list[str]]:
@@ -147,6 +150,42 @@ def _normalize_zone_sensor_map(zone_sensor_map: dict | None) -> dict[str, list[s
         if sensors:
             result[str(key)] = sensors
     return result
+
+
+@callback
+def _migrate_zone_sensor_map_single(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> dict[str, str]:
+    zone_map = entry.options.get(CONF_ZONE_SENSOR_MAP, {})
+    if not isinstance(zone_map, dict):
+        return {}
+    migrated: dict[str, str] = {}
+    for zone_id, value in zone_map.items():
+        sensors = _normalize_zone_sensors(value)
+        if sensors:
+            migrated[str(zone_id)] = sensors[0]
+    if migrated != zone_map:
+        options = dict(entry.options)
+        options[CONF_ZONE_SENSOR_MAP] = migrated
+        hass.config_entries.async_update_entry(entry, options=options)
+        _LOGGER.info("Migrated zone sensor map to a single sensor per zone.")
+    return migrated
+
+
+@callback
+def _async_remove_zone_sensor_switches(hass: HomeAssistant) -> None:
+    registry = er.async_get(hass)
+    removed = 0
+    for registry_entry in list(registry.entities.values()):
+        if registry_entry.domain != "switch" or registry_entry.platform != DOMAIN:
+            continue
+        unique_id = registry_entry.unique_id or ""
+        if not unique_id.startswith("zone_temp_sensor_"):
+            continue
+        registry.async_remove(registry_entry.entity_id)
+        removed += 1
+    if removed:
+        _LOGGER.info("Removed %s legacy zone sensor switch entities.", removed)
 
 
 def _flatten_zone_sensor_map(zone_sensor_map: dict | None) -> list[str]:
@@ -241,15 +280,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: TadoConfigEntry) -> bool
     """Set up Tado from a config entry."""
 
     _async_import_options_from_data_if_missing(hass, entry)
+    migrated_zone_sensor_map = _migrate_zone_sensor_map_single(hass, entry)
+    _async_remove_zone_sensor_switches(hass)
 
     token_file = entry.data.get(CONF_TOKEN_FILE)
     fallback = entry.options.get(CONF_FALLBACK, CONST_OVERLAY_TADO_DEFAULT)
     device_id_overrides = entry.options.get(CONF_DEVICE_ID_OVERRIDES, {})
     device_offsets = entry.options.get(CONF_DEVICE_OFFSETS, {})
     device_zone_map = entry.options.get(CONF_DEVICE_ZONE_MAP, {})
-    zone_sensor_map = _normalize_zone_sensor_map(
-        entry.options.get(CONF_ZONE_SENSOR_MAP, {})
-    )
+    zone_sensor_map = _normalize_zone_sensor_map(migrated_zone_sensor_map)
     scan_interval_seconds = entry.options.get(CONF_SCAN_INTERVAL_SECONDS)
     if scan_interval_seconds is None:
         scan_interval_minutes = entry.options.get(CONF_SCAN_INTERVAL)
@@ -549,4 +588,7 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
 
 async def async_unload_entry(hass: HomeAssistant, entry: TadoConfigEntry) -> bool:
     """Unload a config entry."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    unload_platforms = list(PLATFORMS)
+    if Platform.SWITCH not in unload_platforms:
+        unload_platforms.append(Platform.SWITCH)
+    return await hass.config_entries.async_unload_platforms(entry, unload_platforms)
